@@ -674,7 +674,13 @@ function executePour(src, dst) {
   const tgtY = spoutTargetY - sign * lipX * sinA + src.h * cosA;
 
   killTweensOf(src, ['lift','glow','x','y','angle']);
-  src.lift = 0; src.glow = 0;
+  // Smoothly retract the lift and glow during the first ~0.18s of the
+  // approach to the destination — instead of snapping them to 0 (which
+  // produced a visible "flick" of the yellow selection halo disappearing
+  // the instant the pour started). Lift and glow run as a fast parallel
+  // tween while the slower x/y/angle tween moves the bottle into pour
+  // position over 0.55s.
+  tween(src, { lift: 0, glow: 0 }, 0.18, { ease: 'outQuad' });
 
   tween(src, { x: tgtX, y: tgtY, angle: tiltAngle }, 0.55, {
     ease: 'inOutCubic',
@@ -1391,10 +1397,23 @@ function drawGlass(b) {
   // smoke wisps puff up out of the cork — see drawSealed.
   if (isBottleCompleted(b)) drawSealed(w, h, b);
 
-  // Selected glow
+  // Selected glow — yellow halo around the bottle. The 14-px shadow blur
+  // bleeds INWARD by ~12 px from the stroke (which sits just outside the
+  // bottle outline). Without clipping, that inward yellow shadow tints the
+  // liquid noticeably (the source liquid looks "lighter / different
+  // colour" the whole time the bottle is selected, and snaps back to its
+  // natural colour when glow drops). Clipping to the OUTSIDE of the
+  // bottle outline (via even-odd fill rule against a huge rect) means
+  // the shadow can only render in the area surrounding the bottle, so
+  // the liquid keeps its true colour while the halo is visible.
   if (b.glow > 0) {
     ctx.save();
     ctx.globalAlpha = b.glow;
+    ctx.beginPath();
+    ctx.rect(-w * 5, -h * 1.6, w * 10, h * 2.6);   // large enclosing rect
+    glassBodyPath(w, h, b.isObjective);            // bottle outline (inner cutout)
+    ctx.clip('evenodd');                           // keep only the OUTSIDE region
+
     glassBodyPath(w + 6, h + 6, b.isObjective);
     ctx.strokeStyle = '#fff4c2';
     ctx.lineWidth = 3;
@@ -1543,7 +1562,11 @@ function drawJuiceLayersWorld(b) {
     g.addColorStop(1, juice.mid);
     ctx.fillStyle = g;
 
-    if (isTop && b.slosh > 0.04) {
+    // Threshold lowered from 0.04 → 0.005 so the wavy→flat transition
+    // happens when the wave amplitude is ~0.07px (visually flat) and the
+    // strokes have faded to ~1.6% alpha — switching at that point is
+    // imperceptible. Higher threshold was creating a small visible step.
+    if (isTop && b.slosh > 0.005) {
       drawWavyLayer(topY, drawBaseY, wide, juice, b.slosh, b.sloshSeed);
     } else {
       ctx.fillRect(-wide, topY, wide * 2, drawVisH);
@@ -1594,9 +1617,10 @@ function drawJuiceLayersWorld(b) {
   const topRun = runs[runs.length - 1];
   const topJuice = JUICE[topRun.color];
   const topY = interior.b - b.fillLevel * LAYER_PX;
-  const bob = b.slosh > 0.01
-    ? Math.sin(totalTime * 7 + b.sloshSeed) * b.slosh * 1.8
-    : 0;
+  // No threshold — when slosh = 0, bob = 0 automatically (multiply by 0).
+  // The previous `slosh > 0.01` cutoff was snapping the meniscus from its
+  // last bob position straight to topY, contributing to the visible jump.
+  const bob = Math.sin(totalTime * 7 + b.sloshSeed) * b.slosh * 1.8;
   drawLayerMeniscus(topY + bob, rx, ry, topJuice);
 
   // PASS 4: base ellipse — the bottom of the glass/liquid column seen
@@ -1855,7 +1879,14 @@ function drawWavyLayer(topY, baseY, wide, juice, slosh, seed) {
   // with different freqs, speeds and phases — mimics the GPU displacement
   // shader used in Magic Sort).
   const t = totalTime;
-  const amp1 = Math.min(7, slosh * 8);
+  // Amplitudes reduced from (cap 7, scale 8) → (cap 4, scale 5). The wave
+  // is shifted UP by maxAmp (CLAUDE.md trick to avoid void troughs below
+  // topY), which means the entire wave sits ABOVE topY filled with
+  // juice.top via pad-mode gradient. A larger amplitude produces a
+  // taller "halo" of light colour above the surface, making the liquid
+  // read as visibly LIGHTER during sustained slosh (select / pour-into).
+  // Smaller amplitudes keep the wave alive without lightening the area.
+  const amp1 = Math.min(4, slosh * 5);
   const amp2 = amp1 * 0.5;
   const amp3 = amp1 * 0.28;
   const maxAmp = amp1 + amp2 + amp3;        // worst-case upward excursion
@@ -1872,13 +1903,21 @@ function drawWavyLayer(topY, baseY, wide, juice, slosh, seed) {
           + Math.sin(x * freq3 - t * speed3 + seed * 1.7) * amp3) - maxAmp;
   }
 
-  // Gradient ends at juice.mid — matches the interface ellipse below so
-  // there's no dark seam reappearing when the wave is active.
-  const g = ctx.createLinearGradient(0, topY - maxAmp * 2, 0, baseY);
-  g.addColorStop(0, juice.top);
-  g.addColorStop(0.55, juice.mid);
-  g.addColorStop(1, juice.mid);
-  ctx.fillStyle = g;
+  // IMPORTANT: do NOT create a new gradient here. We rely on the gradient
+  // already set as `ctx.fillStyle` by the caller (drawJuiceLayersWorld),
+  // which uses the run's ORIGINAL baseY (interior.b - run.fromIdx*LAYER_PX),
+  // not the extended drawBaseY that we receive as the `baseY` parameter
+  // of this function. For the bottom-most run, drawBaseY = baseY + wide
+  // (~300 px below the real floor) — if we built a gradient from
+  //   topY → drawBaseY, the visible portion of the liquid (topY → realBaseY)
+  // would only cover ~28% of the gradient range, keeping the colour near
+  // juice.top throughout and making the liquid look noticeably LIGHTER
+  // during slosh. That manifested as: single-colour bottles becoming
+  // pale on select, and a "flick" back to the correct colour when slosh
+  // decayed below the wavy threshold and the renderer switched to fillRect
+  // (which had been using the correct topY → realBaseY gradient all along).
+  // Multi-colour stacks didn't show the bug because the top run isn't the
+  // bottom run there, so its drawBaseY equals its real baseY.
 
   ctx.beginPath();
   const steps = 40;
@@ -1894,8 +1933,20 @@ function drawWavyLayer(topY, baseY, wide, juice, slosh, seed) {
   ctx.closePath();
   ctx.fill();
 
-  // Bright crest line following the wave top
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+  // White highlight strokes on the wave surface — alpha SCALES with slosh
+  // so they fade out smoothly as the wave decays. Without scaling, the
+  // strokes stayed at full alpha right up to slosh<0.04 and then vanished
+  // instantly when the renderer switched to the flat path → that's what
+  // looked like "the liquid suddenly gets darker / cuts to a new colour".
+  // The scaling factor `min(1, slosh/0.3)` reaches 100% at slosh=0.3
+  // (full sustained-select wobble of 0.14 → 47%, full pour-impact of
+  // 1.0 → 100%) and fades to zero as slosh decays toward zero.
+  const strokeFade = Math.min(1, slosh / 0.3);
+  // Reduced max alpha from 0.4 → 0.28 — the original was tuned for the
+  // bright juice-bar scene; on the dark witch background the white crests
+  // were reading as too "shiny" and contributing to the perceived
+  // lightening of the whole liquid surface.
+  ctx.strokeStyle = 'rgba(255,255,255,' + (0.28 * strokeFade).toFixed(3) + ')';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   for (let i = 0; i <= steps; i++) {
@@ -1907,8 +1958,7 @@ function drawWavyLayer(topY, baseY, wide, juice, slosh, seed) {
   }
   ctx.stroke();
 
-  // Secondary highlight line slightly below (hints at refraction/depth)
-  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.strokeStyle = 'rgba(255,255,255,' + (0.12 * strokeFade).toFixed(3) + ')';
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let i = 0; i <= steps; i++) {
@@ -2342,17 +2392,6 @@ function loop(now) {
   drawLogo();
   drawCTA();
   if (won) drawWinOverlay();
-
-  // [TEMP] Build tag — remove once tilt-fix loading is confirmed.
-  // If you don't see "v2-tilt-fix" at the bottom-left, the browser is
-  // serving a cached version of this file.
-  ctx.save();
-  ctx.fillStyle = 'rgba(160,255,80,0.9)';
-  ctx.font = 'bold 11px monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'bottom';
-  ctx.fillText('v2-tilt-fix', 8, H - 4);
-  ctx.restore();
 
   requestAnimationFrame(loop);
 }
