@@ -108,6 +108,181 @@ function updateTweens(dt) {
 }
 
 // ============================================================
+// AUDIO (Web Audio API — procedural SFX & music, no external assets)
+// Maps the Magic Sort sound bank onto a juice-bar tropical timbre.
+// ============================================================
+let audioCtx = null;
+let audioMaster = null;
+let audioMuted = false;
+let ambientTimer = null;
+
+function initAudio() {
+  if (audioCtx) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    audioCtx = new Ctx();
+    audioMaster = audioCtx.createGain();
+    audioMaster.gain.value = 0.55;
+    audioMaster.connect(audioCtx.destination);
+  } catch (e) { audioCtx = null; }
+}
+function audioResume() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+}
+
+// Single-oscillator note with ADSR-ish envelope and optional pitch sweep.
+function playTone(opts) {
+  if (!audioCtx || audioMuted) return;
+  const o = opts || {};
+  const freq    = o.freq    || 440;
+  const dur     = o.dur     || 0.12;
+  const type    = o.type    || 'sine';
+  const vol     = o.vol     || 0.25;
+  const attack  = o.attack  || 0.005;
+  const release = o.release || 0.05;
+  const sweep   = o.sweep   || 0;
+  const t0 = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (sweep) {
+    const target = Math.max(40, freq + sweep);
+    osc.frequency.exponentialRampToValueAtTime(target, t0 + dur);
+  }
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + attack);
+  g.gain.linearRampToValueAtTime(0, t0 + dur + release);
+  osc.connect(g);
+  g.connect(audioMaster);
+  osc.start(t0);
+  osc.stop(t0 + dur + release + 0.02);
+}
+
+// Filtered white noise burst — for splashes, pour streams, swooshes.
+function playNoise(opts) {
+  if (!audioCtx || audioMuted) return;
+  const o = opts || {};
+  const dur     = o.dur     || 0.1;
+  const vol     = o.vol     || 0.25;
+  const freq    = o.freq    || 1500;
+  const q       = o.q       || 4;
+  const attack  = o.attack  || 0.005;
+  const release = o.release || 0.06;
+  const ftype   = o.filter  || 'bandpass';
+  const t0 = audioCtx.currentTime;
+  const len = Math.ceil((dur + release) * audioCtx.sampleRate);
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const filt = audioCtx.createBiquadFilter();
+  filt.type = ftype;
+  filt.frequency.value = freq;
+  filt.Q.value = q;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(vol, t0 + attack);
+  g.gain.linearRampToValueAtTime(0, t0 + dur + release);
+  src.connect(filt);
+  filt.connect(g);
+  g.connect(audioMaster);
+  src.start(t0);
+  src.stop(t0 + dur + release + 0.02);
+}
+
+// === Game-event SFX (juice-bar themed remap of the Magic Sort sounds) ===
+
+// "bottle_up": glass tinkle picking up — short rising triangle
+function sfxBottleUp() {
+  playTone({ freq: 580, dur: 0.07, type: 'triangle', vol: 0.22, sweep: 280, attack: 0.002 });
+}
+// "bottle_down": glass tinkle settling — short falling triangle
+function sfxBottleDown() {
+  playTone({ freq: 720, dur: 0.07, type: 'triangle', vol: 0.18, sweep: -340, attack: 0.002 });
+}
+// "Short_1/Mid/Long": pour stream — bandpassed noise
+function sfxPour() {
+  playNoise({ dur: 0.5, vol: 0.16, freq: 1800, q: 3, attack: 0.05, release: 0.18 });
+}
+// "water_short" + tonal blob: liquid landing splash. Soft attack on both
+// layers + lower frequencies so it reads as "water plop" rather than a
+// sharp percussive burst (the previous 2ms attack was creating a "puff"
+// transient that sounded like a mini-explosion).
+function sfxSplash() {
+  playNoise({ dur: 0.13, vol: 0.10, freq: 1300, q: 5, attack: 0.025, release: 0.08 });
+  playTone({ freq: 350, dur: 0.10, type: 'sine', vol: 0.07, sweep: -100, attack: 0.015, release: 0.05 });
+}
+// "glass_shake": invalid pour — low square bonk
+function sfxInvalid() {
+  playTone({ freq: 180, dur: 0.13, type: 'square', vol: 0.16, sweep: -40, attack: 0.005, release: 0.06 });
+}
+// "Cork_Low" + ice_crack reskinned: umbrella swoosh + 2 ice clinks
+function sfxSealed() {
+  playNoise({ dur: 0.18, vol: 0.14, freq: 4000, q: 1, attack: 0.005, release: 0.08 });
+  setTimeout(() => playTone({ freq: 2400, dur: 0.05, type: 'triangle', vol: 0.18, attack: 0.001 }), 240);
+  setTimeout(() => playTone({ freq: 2800, dur: 0.05, type: 'triangle', vol: 0.16, attack: 0.001 }), 380);
+}
+// Pink reaches goal — sounds like LIQUID FILLING A GLASS. Three layers
+// recreate the physical effect:
+//   1. Tonal pitch sweeping UP (the resonance of the shrinking air column
+//      above the rising water — the iconic "glug-glug rising in pitch")
+//   2. Bandpassed noise → soft burble of the flowing liquid
+//   3. Low triangle body → weight/thump of the pour
+function sfxGoalProgress() {
+  playTone({ freq: 285, dur: 0.55, type: 'sine',     vol: 0.13, sweep: 415, attack: 0.04, release: 0.18 });
+  playNoise({ dur: 0.5,  vol: 0.07, freq: 1100, q: 5,            attack: 0.05, release: 0.15 });
+  playTone({ freq: 160, dur: 0.45, type: 'triangle', vol: 0.04, sweep: 80,  attack: 0.06, release: 0.12 });
+}
+// "win" + "confetti-pop": triumphant arpeggio
+function sfxWin() {
+  const notes = [523, 659, 784, 1047, 1319]; // C E G C E
+  notes.forEach((f, i) => setTimeout(
+    () => playTone({ freq: f, dur: 0.18, type: 'triangle', vol: 0.22, attack: 0.005, release: 0.1 }),
+    i * 90
+  ));
+}
+// "bostap"/CTA tap: short click
+function sfxClick() {
+  playTone({ freq: 1100, dur: 0.04, type: 'sine', vol: 0.2, attack: 0.001 });
+}
+
+// "ambient" (20s loop in the original): light, plucky melody on a major
+// scale — gives a beach-bar atmosphere without overpowering the SFX.
+function startAmbient() {
+  if (!audioCtx || audioMuted || ambientTimer) return;
+  const pattern = [
+    { f: 392, d: 0.35 }, { f: 523, d: 0.35 },
+    { f: 659, d: 0.35 }, { f: 523, d: 0.35 },
+    { f: 587, d: 0.35 }, { f: 698, d: 0.35 },
+    { f: 587, d: 0.35 }, { f: 392, d: 0.55 }
+  ];
+  let idx = 0;
+  function tick() {
+    if (audioMuted || !audioCtx) { ambientTimer = null; return; }
+    const note = pattern[idx % pattern.length];
+    const t0 = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = note.f;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.04, t0 + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0008, t0 + note.d);
+    osc.connect(g);
+    g.connect(audioMaster);
+    osc.start(t0);
+    osc.stop(t0 + note.d + 0.05);
+    idx++;
+    ambientTimer = setTimeout(tick, note.d * 1000);
+  }
+  tick();
+}
+function stopAmbient() { if (ambientTimer) { clearTimeout(ambientTimer); ambientTimer = null; } }
+
+// ============================================================
 // JUICE PALETTE
 // ============================================================
 const JUICE = {
@@ -337,6 +512,10 @@ canvas.addEventListener('mousedown', onTap);
 canvas.addEventListener('touchstart', onTap, { passive: false });
 
 function handleTap(px, py) {
+  // First tap unlocks audio (mobile autoplay policy) and starts the ambient.
+  if (!audioCtx) { initAudio(); startAmbient(); }
+  audioResume();
+
   if (hitCTA(px, py)) { fireCTA(); return; }
   if (won || isAnimating) return;
 
@@ -353,12 +532,14 @@ function handleTap(px, py) {
     // Big initial slosh that settles into a gentle sustained wobble — the
     // surface stays alive the whole time the bottle is selected.
     triggerSlosh(b, 0.95, 0.55, 0.14);
+    sfxBottleUp();
   } else if (selected === b) {
     const s = selected; selected = null;
     killTweensOf(s, ['lift', 'glow']);
     tween(s, { lift: 0, glow: 0 }, 0.2, { ease: 'outQuad' });
     // Full decay once deselected
     triggerSlosh(s, 0.4, 0.6, 0);
+    sfxBottleDown();
   } else {
     const src = selected; const dst = b;
     selected = null;
@@ -374,6 +555,7 @@ function handleTap(px, py) {
         })
       });
       triggerSlosh(dst, 0.5, 0.4);
+      sfxInvalid();
     }
   }
 }
@@ -462,6 +644,7 @@ function executePour(src, dst) {
   function startPourSequence() {
     flowLine = { color, src, dst, sign, alpha: 0, active: true };
     tween(flowLine, { alpha: 1 }, 0.12);
+    sfxPour();
 
     let done = 0;
     function pourOne() {
@@ -469,6 +652,9 @@ function executePour(src, dst) {
       done++;
 
       spawnSplash(dst, color);
+      sfxSplash();
+      // Bonus sparkle when pink lands in the goal tube
+      if (dst.isObjective && color === GOAL_COLOR) sfxGoalProgress();
       // Strong impact slosh, but settle to a sustained wobble (0.22) so the
       // destination keeps visibly sloshing between pour-unit impacts.
       triggerSlosh(dst, 1.0, 0.9, 0.22);
@@ -498,6 +684,7 @@ function executePour(src, dst) {
       ease: 'inOutCubic',
       onComplete: () => {
         triggerSlosh(src, 0.5, 0.6, 0);
+        sfxBottleDown();
         isAnimating = false;
         checkWin();
       }
@@ -513,6 +700,8 @@ function checkWin() {
   }
   if (goalHits >= GOAL_UNITS) {
     won = true;
+    sfxWin();
+    stopAmbient();
     celebrate();
   }
 }
@@ -1634,6 +1823,7 @@ function hitCTA(px, py) {
          py >= ctaHitBox.y && py <= ctaHitBox.y + ctaHitBox.h;
 }
 function fireCTA() {
+  sfxClick();
   try {
     if (window.mraid && window.mraid.open) window.mraid.open('https://apps.apple.com/');
     else if (window.install) window.install();
@@ -1667,6 +1857,7 @@ function loop(now) {
       tween(b, { umbrellaProgress: 1 }, 0.42, { ease: 'outCubic' });
       tween(b, { ice1Progress: 1 },     0.55, { delay: 0.25, ease: 'outBounce' });
       tween(b, { ice2Progress: 1 },     0.55, { delay: 0.42, ease: 'outBounce' });
+      sfxSealed();
     }
   }
 
