@@ -97,6 +97,11 @@ const BENCH = { x: 90, y: 1050, colW: 145, rowH: 95 };
 // Belt offset from grid (px)
 const BELT_OFFSET = 30;
 
+// Where the portal sits along the belt loop. 0 = bottom-left corner (start of
+// the bottom edge). Ships emerge from the portal here and return through it
+// before docking in a hangar bay slot.
+const BELT_T_OFFSET = 0;
+
 // ============= UTILS =============
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -313,6 +318,10 @@ function initBeltGeometry(grid) {
   BELT_GEOM = { segs, lens, total, gx, gy, gw, cell: grid.cellSize, N: grid.N };
 }
 function pointOnBelt(t) {
+  // Shift so the user-facing "lap progress 0" lands at the portal (mid-left).
+  // Ships travel CCW from the portal: down the lower half of left edge → bottom
+  // → right → top → upper half of left edge → back to portal.
+  t = t + BELT_T_OFFSET;
   t = t - Math.floor(t); // wrap to [0,1)
   const target = t * BELT_GEOM.total;
   let acc = 0;
@@ -649,6 +658,32 @@ function drawSlotBar(container) {
     container.addChild(g);
   }
 }
+// HUD divider drawn between bench row 0 (active / pickable) and row 1 (standby).
+// Positioned in the clean gap between row 0's ship body bottom and row 1's
+// label top — both labels (now sitting close to their own ships) are below
+// the line, and row 0's body is above. End-cap arrows for HUD aesthetic.
+function drawBenchDivider(g) {
+  const xL = BENCH.x - 14;
+  const xR = BENCH.x + BENCH_COLS * BENCH.colW + 14;
+  const y  = BENCH.y + BENCH.rowH - 22;   // 1123 — clear of row 0 body and row 1 label stroke
+  // Soft outer halo
+  g.moveTo(xL, y).lineTo(xR, y).stroke({ color: 0x6cd5e8, width: 6, alpha: 0.16 });
+  // Dashed bright core
+  const DASH = 14, GAP = 8;
+  let cx = xL;
+  while (cx < xR) {
+    const x2 = Math.min(cx + DASH, xR);
+    g.moveTo(cx, y).lineTo(x2, y).stroke({ color: 0x6cd5e8, width: 1.6, alpha: 0.85 });
+    cx = x2 + GAP;
+  }
+  // End-cap triangles (point inward)
+  const tri = 7;
+  g.poly([xL + tri, y - tri, xL, y, xL + tri, y + tri]).fill({ color: 0x6cd5e8, alpha: 0.9 });
+  g.poly([xR - tri, y - tri, xR, y, xR - tri, y + tri]).fill({ color: 0x6cd5e8, alpha: 0.9 });
+  // Tiny end nodes
+  g.circle(xL, y, 2.5).fill(0x6cd5e8);
+  g.circle(xR, y, 2.5).fill(0x6cd5e8);
+}
 function drawHeader(container, audio) {
   const t = new PIXI.Text({
     text: 'ASTEROID\nBLAST',
@@ -818,7 +853,9 @@ class Pig {
       style: { fontSize: 32, fontWeight: 900, fill: 0xffffff, stroke: { color: 0x1f2233, width: 5 }, fontFamily: 'sans-serif' }
     });
     this.label.anchor.set(0.5);
-    this.label.position.set(0, -62);
+    // Label sits just above the ship's nose so it reads as attached to its OWN
+    // hull instead of being closer to the ship docked in the row above (bench).
+    this.label.position.set(0, -45);
     this.container.addChild(this.label);
 
     this.container.eventMode = 'static';
@@ -1464,6 +1501,72 @@ class AudioEngine {
   }
 }
 
+// ============= PORTAL (entry/exit for ships) =============
+// A sci-fi gateway sitting on the belt path at `pointOnBelt(0)`. Ships emerge
+// from it when deployed and return through it on lap completion before
+// docking in a hangar bay slot. Static metallic frame + slowly rotating
+// glowing swirl inside.
+function drawPortalFrame(g) {
+  const W = 56, H = 80;
+  const hw = W / 2, hh = H / 2;
+  // Outer dark metal panel
+  g.roundRect(-hw, -hh, W, H, 11).fill({ color: 0x2c3a5e });
+  g.roundRect(-hw, -hh, W, H, 11).stroke({ color: 0x4a6090, width: 2 });
+  // Inner recessed area
+  g.roundRect(-hw + 4, -hh + 4, W - 8, H - 8, 8).fill({ color: 0x1a2a55 });
+  // Portal opening — concentric glowing rings (the "eye")
+  g.circle(0, 0, 26).fill({ color: 0x6cd5e8, alpha: 0.18 });   // outer halo
+  g.circle(0, 0, 22).fill({ color: 0x0a1838 });
+  g.circle(0, 0, 22).stroke({ color: 0x6cd5e8, width: 2 });
+  g.circle(0, 0, 14).fill({ color: 0x1a3a78 });
+  g.circle(0, 0, 14).stroke({ color: 0x6cd5e8, width: 1, alpha: 0.6 });
+  // Frame studs at corners
+  g.circle(-hw + 7, -hh + 7, 2).fill(0x6cd5e8);
+  g.circle( hw - 7, -hh + 7, 2).fill(0x6cd5e8);
+  g.circle(-hw + 7,  hh - 7, 2).fill(0x6cd5e8);
+  g.circle( hw - 7,  hh - 7, 2).fill(0x6cd5e8);
+  // Top/bottom accent bars (HUD seams)
+  g.rect(-hw + 8, -hh + 14, W - 16, 2).fill({ color: 0x6cd5e8, alpha: 0.7 });
+  g.rect(-hw + 8,  hh - 16, W - 16, 2).fill({ color: 0x6cd5e8, alpha: 0.7 });
+}
+function drawPortalSwirl(g) {
+  // Three spiral arms — drawn as polylines of points along an Archimedes-like curve
+  const arms = 3;
+  for (let a = 0; a < arms; a++) {
+    const baseAngle = (a / arms) * Math.PI * 2;
+    g.moveTo(0, 0);
+    const steps = 14;
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const angle = baseAngle + t * Math.PI * 1.4;
+      const r = t * 13;
+      g.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+    }
+    g.stroke({ color: 0xb0e8f5, width: 2, alpha: 0.85, cap: 'round' });
+  }
+  // Bright center
+  g.circle(0, 0, 3).fill(0xffffff);
+}
+class Portal {
+  constructor() {
+    this.container = new PIXI.Container();
+    this.frame = new PIXI.Graphics();
+    drawPortalFrame(this.frame);
+    this.container.addChild(this.frame);
+    this.swirl = new PIXI.Graphics();
+    drawPortalSwirl(this.swirl);
+    this.container.addChild(this.swirl);
+    this._t = 0;
+  }
+  update(deltaMS) {
+    this._t += deltaMS;
+    // Slow spin of the spiral inside the portal
+    this.swirl.rotation = this._t * 0.0015;
+    // Subtle pulse so the portal feels "alive"
+    this.swirl.alpha = 0.85 + 0.15 * Math.sin(this._t * 0.003);
+  }
+}
+
 // ============= HUD PATH CHEVRONS (marching loop) =============
 // Glowing cyan chevrons that pulse along the HUD path showing CCW flow.
 class BeltArrows {
@@ -1557,6 +1660,13 @@ class Game {
     this.arrows = new BeltArrows();
     this.scene.addChild(this.arrows.container);
 
+    // Portal at the entry/exit of the path (mid-left). Drawn over chevrons so
+    // its frame hides any path tick that would otherwise pass through its body.
+    this.portal = new Portal();
+    const portalPos = pointOnBelt(0);
+    this.portal.container.position.set(portalPos.x, portalPos.y);
+    this.scene.addChild(this.portal.container);
+
     this.scene.addChild(this.grid.container);
 
     this.slotBarG = new PIXI.Container(); drawSlotBar(this.slotBarG); this.scene.addChild(this.slotBarG);
@@ -1590,6 +1700,12 @@ class Game {
     const benchCols = buildBenchLayout(this.pigs);
     this.bench = new Bench(benchCols);
     this.bench.onPick = (pig) => this.deployFromBench(pig);
+    // Divider line between bench row 0 and row 1 — drawn BEFORE the bench so
+    // labels render over the line in their column area, leaving the dashes
+    // visible only in the gaps between columns (HUD seam aesthetic).
+    const benchDivG = new PIXI.Graphics();
+    drawBenchDivider(benchDivG);
+    this.scene.addChild(benchDivG);
     this.scene.addChild(this.bench.container);
 
     this.slots = new Slots();
@@ -1759,6 +1875,7 @@ class Game {
 
     // Marching arrows on belt
     if (this.arrows) this.arrows.update(deltaMS);
+    if (this.portal) this.portal.update(deltaMS);
     // Asteroid noise pan — each cell's tilePosition scrolls in its random direction
     if (this.grid) this.grid.update(deltaMS);
 
