@@ -101,6 +101,7 @@ const BELT_OFFSET = 30;
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeIn = t => t * t * t;
 const easeInOut = t => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
 const easeOutBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -389,6 +390,127 @@ function lighten(hex, k) {
 function srand(seed) {
   let s = seed | 0;
   return () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 0) % 1e6) / 1e6; };
+}
+
+// ============= ASTEROID NOISE TEXTURE (Unity MPB-style sharing) =============
+// Generated ONCE at runtime, then every asteroid cell gets a TilingSprite
+// using this SAME texture with a per-cell random pan velocity and `multiply`
+// blend. Because all TilingSprites share the texture, PixiJS batches them
+// into a single draw call — same idea as Unity's MaterialPropertyBlock:
+// per-instance state (tilePosition) without breaking the batch.
+//
+// The noise is generated with TOROIDAL value-noise wrapping (sample-grid
+// indices use modulo) so the texture tiles seamlessly — no visible seam when
+// `tilePosition` scrolls past the texture boundary.
+let __NOISE_TEX__ = null;
+function _tileableValueLayer(SIZE, GRID_CELLS) {
+  // GRID_CELLS must divide SIZE so the noise lattice wraps cleanly.
+  const SCALE = SIZE / GRID_CELLS;
+  const lat = new Float32Array(GRID_CELLS * GRID_CELLS);
+  for (let i = 0; i < lat.length; i++) lat[i] = Math.random();
+  const out = new Float32Array(SIZE * SIZE);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const cx = x / SCALE, cy = y / SCALE;
+      const ix = Math.floor(cx), iy = Math.floor(cy);
+      const fx = cx - ix, fy = cy - iy;
+      const a = lat[iy * GRID_CELLS + ix];
+      const b = lat[iy * GRID_CELLS + ((ix + 1) % GRID_CELLS)];
+      const c = lat[((iy + 1) % GRID_CELLS) * GRID_CELLS + ix];
+      const d = lat[((iy + 1) % GRID_CELLS) * GRID_CELLS + ((ix + 1) % GRID_CELLS)];
+      const u = fx * fx * (3 - 2 * fx);
+      const v = fy * fy * (3 - 2 * fy);
+      out[y * SIZE + x] = (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    }
+  }
+  return out;
+}
+// Bake a soft circular spot (with toroidal wrap so it tiles seamlessly)
+// `intensity` < 0 darkens (crater), > 0 brightens (highlight). Soft quadratic falloff.
+function _bakeSpot(arr, SIZE, cx, cy, r, intensity) {
+  const rExt = r * 1.6;
+  const minY = Math.floor(cy - rExt), maxY = Math.ceil(cy + rExt);
+  const minX = Math.floor(cx - rExt), maxX = Math.ceil(cx + rExt);
+  for (let py = minY; py <= maxY; py++) {
+    for (let px = minX; px <= maxX; px++) {
+      const dx = px - cx, dy = py - cy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d >= rExt) continue;
+      const fall = (1 - d / rExt) * (1 - d / rExt);   // smooth falloff
+      const ix = ((px % SIZE) + SIZE) % SIZE;
+      const iy = ((py % SIZE) + SIZE) % SIZE;
+      const idx = iy * SIZE + ix;
+      arr[idx] = Math.max(0, Math.min(1, arr[idx] + fall * intensity));
+    }
+  }
+}
+function getAsteroidNoiseTexture() {
+  if (__NOISE_TEX__) return __NOISE_TEX__;
+  const SIZE = 64;
+  // Two octaves of value-noise (both lattice sizes divide 64 → tileable)
+  const oct1 = _tileableValueLayer(SIZE, 8);   // chunky lumps
+  const oct2 = _tileableValueLayer(SIZE, 16);  // finer grit
+  const base = new Float32Array(SIZE * SIZE);
+  for (let i = 0; i < base.length; i++) base[i] = oct1[i] * 0.6 + oct2[i] * 0.4;
+
+  // Bake CRATERS — dark pit + tiny darker center + offset light rim, just like
+  // the per-cell graphics used to draw. Toroidal wrap keeps the texture tileable
+  // so when `tilePosition` scrolls past an edge the crater wraps too.
+  const NUM_CRATERS = 22;
+  for (let c = 0; c < NUM_CRATERS; c++) {
+    const cx = Math.random() * SIZE;
+    const cy = Math.random() * SIZE;
+    const r = 1.6 + Math.random() * 2.4;
+    _bakeSpot(base, SIZE, cx, cy, r, -0.55);                                  // dark pit
+    _bakeSpot(base, SIZE, cx - r * 0.25, cy - r * 0.25, r * 0.55, -0.30);     // darker center
+    _bakeSpot(base, SIZE, cx + r * 0.45, cy + r * 0.40, r * 0.30, +0.45);     // light rim
+  }
+  // A few extra GRAIN DOTS — tiny dark specks for surface roughness
+  const NUM_GRAIN = 28;
+  for (let g = 0; g < NUM_GRAIN; g++) {
+    const cx = Math.random() * SIZE;
+    const cy = Math.random() * SIZE;
+    _bakeSpot(base, SIZE, cx, cy, 0.7 + Math.random() * 0.6, -0.18);
+  }
+
+  // Quantize the continuous noise to FIVE discrete brightness steps
+  // (Substance Designer "Quantize" node analog) — gives a cartoon / cell-shaded
+  // look. The darkest step is pushed deeper so crater cores read as very dark.
+  //   STEP_DARKEST = deepest crater core (the darkest band)
+  //   STEP_DARK    = crater body
+  //   STEP_MID     = mid rock tone
+  //   STEP_HIMID   = soft transition
+  //   STEP_LITE    = bright untouched rock face
+  const STEP_DARKEST = 0.28;
+  const STEP_DARK    = 0.50;
+  const STEP_MID     = 0.72;
+  const STEP_HIMID   = 0.88;
+  const STEP_LITE    = 1.00;
+  const TH_1 = 0.20;
+  const TH_2 = 0.42;
+  const TH_3 = 0.62;
+  const TH_4 = 0.80;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(SIZE, SIZE);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const n = base[y * SIZE + x];
+      const factor = n < TH_1 ? STEP_DARKEST :
+                     n < TH_2 ? STEP_DARK    :
+                     n < TH_3 ? STEP_MID     :
+                     n < TH_4 ? STEP_HIMID   : STEP_LITE;
+      const v = Math.floor(Math.max(0, Math.min(255, factor * 255)));
+      const i = (y * SIZE + x) * 4;
+      imgData.data[i] = imgData.data[i + 1] = imgData.data[i + 2] = v;
+      imgData.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  __NOISE_TEX__ = PIXI.Texture.from(canvas);
+  return __NOISE_TEX__;
 }
 
 // Space background: dark gradient + many stars + a few drifting asteroids in the corners
@@ -721,7 +843,15 @@ class Pig {
     else if (view === 'side') edge = mirrored ? 'left' : 'right';
     this.setEdge(edge);
   }
-  setAmmo(n) { this.ammo = n; this.label.text = String(n); }
+  setAmmo(n) {
+    this.ammo = n;
+    this.label.text = String(n);
+    // Hide the ammo label as soon as the ship fires its last shot, so the
+    // upcoming death spin animation doesn't look weird with a "0" rotating along.
+    if (n <= 0 && this.label.visible) {
+      tween.add(this.label, { alpha: 0 }, 180, easeOut, () => { this.label.visible = false; });
+    }
+  }
   popLabel() { this.label.scale.set(1.4); tween.add(this.label.scale, { x: 1, y: 1 }, 200, easeOut); }
   popBody() { this.body.scale.set(0.85); tween.add(this.body.scale, { x: 1, y: 1 }, 220, easeOutBack); }
   resetFiring() { this.lastFireIdx = -1; this.lastFireEdge = null; }
@@ -736,9 +866,15 @@ class Pig {
 }
 
 // ============= ASTEROID CELL =============
-// Each asteroid tile is a chunky 3D block (same footprint as before so the
-// gameplay LoS math is unchanged) with subtle crater dots etched into the top
-// face. Color tints the rock per "team", same as the original pixel art.
+// Bumpy 8-sided polygon (irregular octagon) per cell + a shared noise texture
+// overlay that's rotated/positioned uniquely per cell. The noise is multiplied
+// on top of the colored rock face, giving each asteroid a unique rocky surface
+// "as if" it were rotating on its own axis (Unity MPB-style: shared texture,
+// per-instance transform, single batched draw call).
+//
+// `sprite` is a Container so we can layer Graphics (polygon + craters) under
+// the noise Sprite. The Container API matches what destroyCell() needs
+// (pivot/position/scale).
 class PixelCell {
   constructor(color, x, y, size) {
     this.color = color;
@@ -746,29 +882,80 @@ class PixelCell {
     this.gx = x;
     this.gy = y;
     this.size = size;
-    this.sprite = new PIXI.Graphics();
+    this.sprite = new PIXI.Container();
     if (this.alive) {
       const c = COLORS[color];
       const dark = darken(c, 0.55);
-      const darker = darken(c, 0.40);
-      const light = lighten(c, 1.3);
-      const SHADOW = 5; // 3D extruded depth (asteroid "rock" look)
-      // Bottom face (darker, offset down)
-      this.sprite.roundRect(0, SHADOW, size - 1, size - 1, 4).fill(dark);
-      // Top face — asteroid rock surface
-      this.sprite.roundRect(0, 0, size - 1, size - 1, 4).fill(c);
-      // Top sheen — subtle highlight strip
-      this.sprite.roundRect(2, 2, size - 5, 3, 1.5).fill(light);
-      // Crater pits — deterministic per (x,y) so they don't flicker
+      const darker = darken(c, 0.38);
+      const darkest = darken(c, 0.25);
+      const light = lighten(c, 1.32);
+      const lighter = lighten(c, 1.55);
+
+      // Deterministic per-cell rng so the rock shape doesn't flicker
       const seed = (x * 73856093) ^ (y * 19349663);
       const rnd = srand(seed);
-      const pit = (px, py, pr) => {
-        this.sprite.circle(px, py, pr).fill(darker);
-        this.sprite.circle(px - pr * 0.3, py - pr * 0.3, pr * 0.45).fill(dark);
-      };
-      // 1-2 small craters depending on rng — keeps tiles from looking uniform
-      if (rnd() < 0.55) pit(size * (0.25 + rnd() * 0.5), size * (0.45 + rnd() * 0.35), Math.max(1.5, size * 0.10));
-      if (rnd() < 0.30) pit(size * (0.15 + rnd() * 0.7), size * (0.20 + rnd() * 0.3), Math.max(1, size * 0.06));
+
+      // 8-sided polygon with random radius variation per vertex (asteroid silhouette).
+      // baseR slightly larger than half-cell so adjacent same-color rocks overlap
+      // and read as a connected pattern (avoids visible gaps in the moon shape).
+      const sides = 8;
+      const cx = size / 2, cy = size / 2;
+      const baseR = size * 0.56;
+      const points = [];
+      for (let i = 0; i < sides; i++) {
+        const a = (i / sides) * Math.PI * 2 - Math.PI / 2 + (Math.PI / sides);
+        const r = baseR * (0.92 + rnd() * 0.18);  // 0.92..1.10 of baseR
+        points.push(cx + Math.cos(a) * r);
+        points.push(cy + Math.sin(a) * r);
+      }
+      // Shadow polygon — same shape, offset down (3D extrusion feel)
+      const SHADOW = 4;
+      const shadowPts = points.map((v, i) => i % 2 === 1 ? v + SHADOW : v);
+
+      const baseG = new PIXI.Graphics();
+      baseG.poly(shadowPts).fill(darkest);
+      baseG.poly(points).fill(c);
+      // Top-left light highlight — small bright region for shading
+      baseG.circle(size * 0.30, size * 0.28, size * 0.22).fill({ color: lighter, alpha: 0.45 });
+      // Crater pits + grain dots are NO LONGER drawn here — they are baked into
+      // the shared noise texture so they pan along with it (and stay batched).
+      this.sprite.addChild(baseG);
+
+      // ---- Noise overlay (Unity MPB analog) — TilingSprite + per-cell pan ----
+      // Shared tileable texture, per-cell random pan velocity, multiply blend.
+      // All TilingSprites share the texture so PixiJS batches them in 1 draw call.
+      // tilePosition scrolls continuously in the cell's random direction —
+      // gives the impression that each asteroid is rotating on its own axis.
+      const noise = new PIXI.TilingSprite({
+        texture: getAsteroidNoiseTexture(),
+        width: size,
+        height: size,
+      });
+      noise.position.set(0, 0);
+      // Random initial pan offset so neighboring cells don't show the same crop
+      noise.tilePosition.set(rnd() * 64, rnd() * 64);
+      // Random rotation of the tile pattern (PIXI v8 supports tileRotation via tileTransform)
+      noise.tileScale.set(1, 1);
+      noise.blendMode = 'multiply';
+      noise.alpha = 0.78;
+      this.sprite.addChild(noise);
+      this.noiseSprite = noise;
+
+      // Per-cell pan velocity (px/ms) — random direction, random speed in
+      // [MAX/4 .. MAX]. Wider range means some asteroids drift very slowly
+      // while others move at the previous max — the variance reads like
+      // different rocks tumbling at different rates.
+      const panAng = rnd() * Math.PI * 2;
+      const panSpeed = 0.003 + rnd() * 0.010;        // 3..13 px/sec (≈ MAX/4 .. MAX)
+      this._noiseVx = Math.cos(panAng) * panSpeed;
+      this._noiseVy = Math.sin(panAng) * panSpeed;
+
+      // White rocks need a faint stroke so they don't disappear on the dark grid bg
+      if (color === 'W') {
+        const outline = new PIXI.Graphics();
+        outline.poly(points).stroke({ color: 0xc8c8d8, width: 1, alpha: 0.7 });
+        this.sprite.addChild(outline);
+      }
     }
   }
   // worldPos = world-space center of this cell (so particles spawn on top of the tile,
@@ -828,7 +1015,14 @@ class PixelCell {
     // Cell sprite collapses in its own (grid-local) coord system.
     this.sprite.pivot.set(this.size / 2, this.size / 2);
     this.sprite.position.set(this.sprite.position.x + this.size / 2, this.sprite.position.y + this.size / 2);
-    tween.add(this.sprite.scale, { x: 0, y: 0 }, 200, easeOut, () => { if (this.sprite) this.sprite.destroy(); });
+    tween.add(this.sprite.scale, { x: 0, y: 0 }, 200, easeOut, () => { if (this.sprite) this.sprite.destroy({ children: true }); });
+  }
+  // Per-frame: scroll the noise texture in this cell's random pan direction.
+  // Cheap: just two adds + a wraparound — all noise sprites still batch.
+  updateNoise(deltaMS) {
+    if (!this.alive || !this.noiseSprite || this.noiseSprite.destroyed) return;
+    this.noiseSprite.tilePosition.x += this._noiseVx * deltaMS;
+    this.noiseSprite.tilePosition.y += this._noiseVy * deltaMS;
   }
 }
 
@@ -879,6 +1073,14 @@ class PixelGrid {
   }
   remainingCount() {
     return Object.values(this.cellsByColor).reduce((a, b) => a + b.length, 0);
+  }
+  // Drives per-asteroid noise pan animation. Iterates only alive cells (via
+  // cellsByColor) so destroyed asteroids cost nothing.
+  update(deltaMS) {
+    for (const k in this.cellsByColor) {
+      const arr = this.cellsByColor[k];
+      for (let i = 0; i < arr.length; i++) arr[i].updateNoise(deltaMS);
+    }
   }
 }
 
@@ -1311,6 +1513,10 @@ class Game {
     this.lost = false;
     this.slotWarnT = 0;     // ms remaining on slot warning flash
     this.audio = new AudioEngine();
+    // Mission timer: 1 min 30 — runs out → loss. Starts on first interaction.
+    this.TIME_LIMIT_MS = 90 * 1000;
+    this.timeRemainingMs = this.TIME_LIMIT_MS;
+    this.timeRunning = false;
   }
   countOnBelt() {
     let n = 0;
@@ -1393,8 +1599,10 @@ class Game {
     this.activeLayer = new PIXI.Container();
     this.scene.addChild(this.activeLayer);
 
-    this.hint = this._makeHint();
-    this.scene.addChild(this.hint);
+    // Mission timer HUD — sci-fi panel above the asteroid frame
+    this._timerHud = this._makeTimerHud();
+    this.scene.addChild(this._timerHud);
+    this._updateTimerText();
 
     this.winOverlay = this._makeWinOverlay();
     this.winOverlay.visible = false;
@@ -1404,39 +1612,54 @@ class Game {
     this.loseOverlay.visible = false;
     this.scene.addChild(this.loseOverlay);
 
-    this.updateHint();
     this.app.ticker.add((ticker) => this.update(ticker.deltaMS));
   }
 
-  _makeHint() {
-    // Sci-fi tap hint — a glowing targeting reticle (crosshair + ring)
-    const h = new PIXI.Graphics();
-    h.circle(0, 0, 22).stroke({ color: 0x6cd5e8, width: 3, alpha: 0.95 });
-    h.circle(0, 0, 14).stroke({ color: 0xffffff, width: 2, alpha: 0.95 });
-    h.moveTo(-26, 0).lineTo(-10, 0).stroke({ color: 0x6cd5e8, width: 3 });
-    h.moveTo( 10, 0).lineTo( 26, 0).stroke({ color: 0x6cd5e8, width: 3 });
-    h.moveTo(0, -26).lineTo(0, -10).stroke({ color: 0x6cd5e8, width: 3 });
-    h.moveTo(0,  10).lineTo(0,  26).stroke({ color: 0x6cd5e8, width: 3 });
-    h.circle(0, 0, 3).fill(0xffffff);
-    h.alpha = 0.95; h.visible = false;
-    return h;
+  // Tap-hint reticle was removed — it didn't fit the asteroid theme. Kept this
+  // as a no-op so the existing `this.updateHint()` call sites stay valid.
+  updateHint() {}
+
+  // ---------- Mission timer ----------
+  _makeTimerHud() {
+    const c = new PIXI.Container();
+    const W = 156, H = 28;
+    const bg = new PIXI.Graphics();
+    bg.roundRect(-W/2, -H/2, W, H, 8).fill({ color: 0x0a1838, alpha: 0.92 });
+    bg.roundRect(-W/2, -H/2, W, H, 8).stroke({ color: 0x6cd5e8, width: 2 });
+    // Tiny clock icon on the left
+    bg.circle(-58, 0, 8).stroke({ color: 0x6cd5e8, width: 1.5 });
+    bg.moveTo(-58, 0).lineTo(-58, -5).stroke({ color: 0x6cd5e8, width: 1.5 });
+    bg.moveTo(-58, 0).lineTo(-54, 2).stroke({ color: 0x6cd5e8, width: 1.5 });
+    c.addChild(bg);
+    const txt = new PIXI.Text({
+      text: '01:30',
+      style: { fontSize: 20, fontWeight: 900, fill: 0x6cd5e8, fontFamily: 'sans-serif', letterSpacing: 2 }
+    });
+    txt.anchor.set(0.5);
+    txt.position.set(12, 0);  // shift right of clock icon
+    c.addChild(txt);
+    c.position.set(DESIGN_W / 2, 161);
+    this._timerText = txt;
+    return c;
   }
-  updateHint() {
-    let target = null;
-    // Prefer slot pig (teach release)
-    for (const p of this.activePigs) if (p.state === 'inSlot') { target = p; break; }
-    if (!target) {
-      for (const p of this.bench.pigs) if (p.benchRow === 0 && p.state === 'bench') { target = p; break; }
-    }
-    if (!target) { this.hint.visible = false; return; }
-    this.hint.visible = true;
-    this.hint.position.set(target.container.x + 28, target.container.y + 50);
+  _updateTimerText() {
+    if (!this._timerText) return;
+    const sec = Math.max(0, Math.ceil(this.timeRemainingMs / 1000));
+    const mm = Math.floor(sec / 60);
+    const ss = sec % 60;
+    this._timerText.text = `${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+    // Pulse red in the final 10 seconds for urgency
+    this._timerText.style.fill = sec <= 10 ? 0xff5b3a : 0x6cd5e8;
+  }
+  startTimer() {
+    if (!this.timeRunning && !this.lost && !this.won) this.timeRunning = true;
   }
 
   deployFromBench(pig) {
     if (this.lost || this.won) return;
     if (this.countOnBelt() >= BELT_CAP) return; // belt full — block silently
     this.audio.bootstrap();   // first user interaction → starts audio + music
+    this.startTimer();        // first interaction also starts the mission timer
     this.audio.playDeploy();
     this.bench.removePig(pig);
     pig.state = 'toBelt';
@@ -1458,6 +1681,7 @@ class Game {
   releaseFromSlot(pig) {
     if (pig.state !== 'inSlot' || this.lost || this.won) return;
     if (this.countOnBelt() >= BELT_CAP) return;
+    this.startTimer();
     this.audio.playDeploy();
     this.slots.vacate(pig);
     pig.state = 'toBelt';
@@ -1535,6 +1759,20 @@ class Game {
 
     // Marching arrows on belt
     if (this.arrows) this.arrows.update(deltaMS);
+    // Asteroid noise pan — each cell's tilePosition scrolls in its random direction
+    if (this.grid) this.grid.update(deltaMS);
+
+    // Mission timer countdown — only ticks while running and game not finished
+    if (this.timeRunning && !this.lost && !this.won) {
+      this.timeRemainingMs -= deltaMS;
+      if (this.timeRemainingMs <= 0) {
+        this.timeRemainingMs = 0;
+        this._updateTimerText();
+        this.gameOver(null, 'timeout');
+      } else {
+        this._updateTimerText();
+      }
+    }
 
     if (this.lost || this.won) return;
 
@@ -1590,9 +1828,10 @@ class Game {
     }
   }
 
-  gameOver(arrivingPig) {
+  gameOver(arrivingPig, reason = 'overflow') {
     if (this.lost) return;
     this.lost = true;
+    this.timeRunning = false;
     this.audio.playLose();
     this._flashSlots();
     // Snap arriving pig to a stack near the slots area
@@ -1601,6 +1840,10 @@ class Game {
       tween.killOf(arrivingPig.container.position, ['x', 'y']);
       tween.add(arrivingPig.container.position, { x: pos.x + 30, y: pos.y - 30 }, 200, easeOut);
       arrivingPig.state = 'dead';
+    }
+    // Tailor the lose overlay subtitle to the reason
+    if (this._loseSubtitle) {
+      this._loseSubtitle.text = reason === 'timeout' ? 'Out of time!' : 'Hangar bays overloaded!';
     }
     setTimeout(() => {
       this.loseOverlay.visible = true;
@@ -1624,6 +1867,7 @@ class Game {
       style: { fontSize: 36, fontWeight: 700, fill: 0xffffff }
     });
     sub.anchor.set(0.5); sub.position.set(DESIGN_W / 2, 560); c.addChild(sub);
+    this._loseSubtitle = sub;   // gameOver() rewrites this for the timeout case
     const btn = new PIXI.Graphics();
     btn.roundRect(-180, -50, 360, 100, 28).fill(0xffc940);
     btn.roundRect(-176, -46, 352, 92, 24).stroke({ color: 0xc8951a, width: 4 });
@@ -1706,24 +1950,32 @@ class Game {
     this.audio.playVanish();
     if (pig.slotIdx >= 0) this.slots.vacate(pig);
     const cx = pig.container.x, cy = pig.container.y;
-    for (let i = 0; i < 8; i++) {
-      const s = new PIXI.Graphics();
-      s.star(0, 0, 4, 8, 4).fill(0xfff8a0);
-      s.position.set(cx, cy);
-      this.fxLayer.addChild(s);
-      const ang = Math.random() * Math.PI * 2;
-      const dist = 80 + Math.random() * 50;
-      tween.add(s.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 600, easeOut);
-      tween.add(s, { alpha: 0, rotation: Math.PI * 2 }, 600, easeOut, () => s.destroy());
-      tween.add(s.scale, { x: 0.2, y: 0.2 }, 600, easeOut);
-    }
-    tween.add(pig.container.scale, { x: 0, y: 0 }, VANISH_MS, easeOut);
-    tween.add(pig.container, { rotation: Math.PI * 3, alpha: 0 }, VANISH_MS, easeOut, () => {
-      pig.state = 'dead';
-      const i = this.activePigs.indexOf(pig);
-      if (i >= 0) this.activePigs.splice(i, 1);
-      pig.container.destroy();
-      this.updateHint();
+
+    // Phase 1 — ship spins in place (no shrink, no fade), accelerating into the
+    // burst (easeIn curve) so the rotation gets faster as it approaches death.
+    const SPIN_MS = 800;
+    const BURST_MS = 750;
+    tween.add(pig.container, { rotation: pig.container.rotation + Math.PI * 4 }, SPIN_MS, easeIn, () => {
+      // Phase 2 — ship turns into a shower of yellow stars, then fades out.
+      for (let i = 0; i < 10; i++) {
+        const s = new PIXI.Graphics();
+        s.star(0, 0, 4, 9, 4).fill(0xfff8a0);
+        s.position.set(cx, cy);
+        this.fxLayer.addChild(s);
+        const ang = Math.random() * Math.PI * 2;
+        const dist = 90 + Math.random() * 60;
+        tween.add(s.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, BURST_MS, easeOut);
+        tween.add(s, { alpha: 0, rotation: Math.PI * 2 }, BURST_MS, easeOut, () => s.destroy());
+        tween.add(s.scale, { x: 0.25, y: 0.25 }, BURST_MS, easeOut);
+      }
+      tween.add(pig.container.scale, { x: 0, y: 0 }, BURST_MS, easeOut);
+      tween.add(pig.container, { alpha: 0 }, BURST_MS, easeOut, () => {
+        pig.state = 'dead';
+        const i = this.activePigs.indexOf(pig);
+        if (i >= 0) this.activePigs.splice(i, 1);
+        pig.container.destroy();
+        this.updateHint();
+      });
     });
   }
 
@@ -1749,6 +2001,7 @@ class Game {
     return c;
   }
   celebrate() {
+    this.timeRunning = false;
     this.audio.playWin();
     for (let i = 0; i < 40; i++) {
       const conf = new PIXI.Graphics();
