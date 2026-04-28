@@ -1206,6 +1206,31 @@ function buildBenchLayout(allPigs) {
     cols[c].push(others.shift() || purple.shift());
   }
 
+  // Diversity guarantee: row 0 must have AT LEAST 2 distinct colors. If by
+  // chance the random shuffle picked 4 ships of the same color, swap one
+  // (last column) with a different-colored ship from the remaining pool.
+  // Preference: pull from `others` first (preserves the row 0 no-purple
+  // intent); fall back to `purple` only if no other choice exists. The
+  // displaced ship is returned to its OWN array based on color, so the
+  // total ammo-per-color invariant and the row 1/2 quotas are unaffected.
+  {
+    const r0 = cols.map(col => col[0]);
+    if (new Set(r0.map(p => p.color)).size === 1) {
+      const sameColor = r0[0].color;
+      let pool = others;
+      let idx = others.findIndex(p => p.color !== sameColor);
+      if (idx < 0) { pool = purple; idx = purple.findIndex(p => p.color !== sameColor); }
+      if (idx >= 0) {
+        const displaced = cols[BENCH_COLS - 1][0];
+        cols[BENCH_COLS - 1][0] = pool[idx];
+        pool.splice(idx, 1);
+        // Return the displaced ship to the array matching its color
+        (displaced.color === 'P' ? purple : others).push(displaced);
+      }
+      // Extremely unlikely fallthrough: every ship is the same color → give up.
+    }
+  }
+
   // Row 1: 1 purple + 3 non-purple (random column for the purple)
   const r1Purple = Math.floor(Math.random() * BENCH_COLS);
   for (let c = 0; c < BENCH_COLS; c++) {
@@ -1263,6 +1288,15 @@ class Slots {
         if (p.state === 'inSlot') {
           tween.killOf(p.container.position, ['x', 'y']);
           tween.add(p.container.position, this.pos(i - 1), SLOT_REFLOW_MS, easeOut);
+        } else if (p.state === 'toSlot' && this.onReflowToSlot) {
+          // BUG FIX: ship is still mid-flight to its OLD slot position. Without
+          // re-targeting, it would land at the wrong slot visually while
+          // slots[] points it to the new (lower) slot — leaving the lower slot
+          // visually empty and making the next arriving ship pile onto the
+          // higher slot (where this in-flight ship visually lands). The Game
+          // re-issues the position tween + the toSlot→inSlot completion via
+          // this callback (decouples Slots from the landing logic).
+          this.onReflowToSlot(p);
         }
       }
     }
@@ -1616,8 +1650,8 @@ class Game {
     this.lost = false;
     this.slotWarnT = 0;     // ms remaining on slot warning flash
     this.audio = new AudioEngine();
-    // Mission timer: 1 min 30 — runs out → loss. Starts on first interaction.
-    this.TIME_LIMIT_MS = 90 * 1000;
+    // Mission timer: 2 min — runs out → loss. Starts on first interaction.
+    this.TIME_LIMIT_MS = 120 * 1000;
     this.timeRemainingMs = this.TIME_LIMIT_MS;
     this.timeRunning = false;
   }
@@ -1710,6 +1744,9 @@ class Game {
 
     this.slots = new Slots();
     this.slots.onRelease = (pig) => this.releaseFromSlot(pig);
+    // Hook for vacate-reflow when an in-flight ('toSlot') ship gets shifted
+    // to a lower slot — re-issue the position tween + landing callback.
+    this.slots.onReflowToSlot = (pig) => this._flyShipToSlot(pig, true);
     this.scene.addChild(this.slots.container);
 
     this.activeLayer = new PIXI.Container();
@@ -1813,6 +1850,27 @@ class Game {
     this.updateHint();
   }
 
+  // Fly a ship to its CURRENT slot (read from pig.slotIdx). Used both for the
+  // initial "lap end → land in slot" transition and when a vacate-reflow
+  // shifts a still-in-flight ship to a lower slot index. Recreating the
+  // tween (instead of mutating the in-flight one) re-attaches the
+  // toSlot→inSlot completion callback so the ship correctly finalizes.
+  _flyShipToSlot(pig, isReflow) {
+    tween.killOf(pig.container.position, ['x', 'y']);
+    const target = this.slots.pos(pig.slotIdx);
+    const duration = isReflow ? SLOT_REFLOW_MS : SLOT_TRANSIT_MS;
+    tween.add(pig.container.position, { x: target.x, y: target.y }, duration, easeOut, () => {
+      // Guard: a ship can only "land" if it's still in 'toSlot'. If it was
+      // released back to the belt while in flight, we skip the finalization.
+      if (pig.state !== 'toSlot') return;
+      pig.state = 'inSlot';
+      pig.setView('back', false);   // BACK view in slot — same as bench
+      this._landSquash(pig);
+      this.audio.playLand();
+      this.updateHint();
+    });
+  }
+
   // Squash-anticipation → springy stretch → arc-style move to target → onComplete
   _anticipateThenJumpTo(pig, target, moveMS, onComplete) {
     tween.killOf(pig.body.scale, ['x', 'y']);
@@ -1904,15 +1962,7 @@ class Game {
         if (idx >= 0) {
           this.slots.occupy(pig, idx);
           pig.state = 'toSlot';
-          const target = this.slots.pos(idx);
-          tween.killOf(pig.container.position, ['x', 'y']);
-          tween.add(pig.container.position, { x: target.x, y: target.y }, SLOT_TRANSIT_MS, easeOut, () => {
-            pig.state = 'inSlot';
-            pig.setView('back', false); // BACK view in slot — same as bench
-            this._landSquash(pig);       // squash on slot impact
-            this.audio.playLand();
-            this.updateHint();
-          });
+          this._flyShipToSlot(pig, false);
         } else {
           // No free slot — GAME OVER
           this.gameOver(pig);
