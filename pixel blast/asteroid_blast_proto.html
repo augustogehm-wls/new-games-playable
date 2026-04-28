@@ -1,0 +1,1800 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Asteroid Blast — Prototype</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #05081a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.js"></script>
+<script>
+"use strict";
+
+/* ============================================================
+   ASTEROID BLAST — Prototype (auto-shoot from HUD path, LoS-based)
+
+   - Spaceships orbit slowly around a closed HUD path hugging
+     the asteroid field's 4 edges. While on the path, each ship
+     auto-fires a laser at its own color when:
+       * the asteroid directly INWARD from its current position
+         (in the row/col it's on) is alive AND its color, AND
+       * no other-colored asteroid sits between ship and target.
+   - When ship finishes a lap, it docks in the next free hangar
+     bay (5 bays below the field). Tap the docked ship to launch
+     it back on the path for another lap.
+   - Ship with ammo == 0 explodes (spin + sparks) wherever
+     it is. Win when the asteroid field is empty.
+   ============================================================ */
+
+// ============= CONSTANTS =============
+const DESIGN_W = 750;
+const DESIGN_H = 1334;
+
+const COLORS = {
+  bg:       0x05081a,   // deep space
+  bgDark:   0x020410,   // near-black void inside grid
+  P:        0x9b4dca,   // purple asteroid
+  B:        0x1f2233,   // dark/iron asteroid
+  W:        0xf5f5f5,   // icy white asteroid
+  C:        0x4ec3d8,   // ice/blue asteroid
+  Y:        0xffd24a,   // golden star fragment
+  frame:    0x3a4d7a,   // sci-fi metal panel
+  frameHi:  0x6cd5e8,   // glowing edge
+  frameLo:  0x1f2c4a,   // shadow side
+  belt:     0x0a1838,   // HUD path base
+  beltHi:   0x6cd5e8,   // glowing dashed cyan
+  pigEye:   0x1a1d2e,
+  benchSlot: 0x141a36,
+  benchSlotBorder: 0x3a4d7a,
+};
+
+// Ship tints (per color code). Same color codes as asteroids so a ship's
+// laser only damages matching-color asteroids — gameplay invariant unchanged.
+const PIG_TINTS = {
+  P: 0xb070dd,
+  B: 0x36394e,
+  W: 0xfafafa,
+  C: 0x6cd5e8,
+  Y: 0xffd95c,
+};
+
+const GRID_N = 25;            // 25×25 = 625 cells (multiple of 5 → clean ammo math)
+const NUM_PIGS = 36;
+const AMMO_STEP = 5;          // pig ammo values are multiples of this
+const AMMO_MAX = 40;
+const NUM_SLOTS = 5;
+const BENCH_COLS = 4;
+const BENCH_ROWS = 9;
+const BENCH_VISIBLE_ROWS = 3;
+
+const LAP_MS = 6500;            // 1 full lap = 6.5s
+const ARROW_LOOP_MS = LAP_MS * 2; // arrows visually march at HALF the belt speed
+const EDGE_TURN_MS = 220;       // smooth body rotation on corners
+const BELT_CAP = 5;             // max pigs simultaneously on belt (excluding slots)
+const WARN_FLASH_MS = 700;      // duration of red warning flash
+const BULLET_MS = 180;
+const SLOT_TRANSIT_MS = 480;
+const VANISH_MS = 540;
+const BENCH_REFLOW_MS = 280;
+const SLOT_REFLOW_MS = 240;
+
+// Layout
+const FRAME = { x: 50, y: 175, w: 650, h: 650 };
+const SLOT_ROW_Y = 920;
+const SLOT_W = 110;
+const SLOT_GAP = 14;
+const SLOT_TOTAL_W = NUM_SLOTS * SLOT_W + (NUM_SLOTS - 1) * SLOT_GAP;
+const SLOT_X0 = (DESIGN_W - SLOT_TOTAL_W) / 2;
+const BENCH = { x: 90, y: 1050, colW: 145, rowH: 95 };
+
+// Belt offset from grid (px)
+const BELT_OFFSET = 30;
+
+// ============= UTILS =============
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+const easeOutBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ============= TWEEN =============
+class Tweener {
+  constructor() { this.active = []; }
+  add(target, props, duration, ease = easeOut, onComplete) {
+    const start = {};
+    for (const k of Object.keys(props)) start[k] = target[k];
+    const tw = { target, start, end: { ...props }, duration, ease, onComplete, t: 0, done: false };
+    this.active.push(tw);
+    return tw;
+  }
+  // Kill any active tweens whose target matches AND whose props overlap.
+  // If `props` omitted, kills all tweens on target.
+  killOf(target, propKeys) {
+    for (const tw of this.active) {
+      if (tw.target !== target) continue;
+      if (!propKeys) { tw.done = true; continue; }
+      for (const k of propKeys) if (k in tw.end) { tw.done = true; break; }
+    }
+  }
+  update(deltaMS) {
+    for (const tw of this.active) {
+      if (tw.done) continue;
+      tw.t += deltaMS / tw.duration;
+      const t = clamp(tw.t, 0, 1);
+      const e = tw.ease(t);
+      for (const k of Object.keys(tw.end)) tw.target[k] = lerp(tw.start[k], tw.end[k], e);
+      if (tw.t >= 1) { tw.done = true; if (tw.onComplete) tw.onComplete(); }
+    }
+    this.active = this.active.filter(tw => !tw.done);
+  }
+}
+const tween = new Tweener();
+
+// ============= PATTERN GEN =============
+function generateMoonPattern(N) {
+  const grid = Array.from({ length: N }, () => Array(N).fill('P'));
+  // Larger moon so its outer rim (cyan/white) reaches near grid edges,
+  // giving every color reachable cells from at least one belt edge.
+  const cx = N * 0.5, cy = N * 0.5, moonR = N * 0.46;
+  const cutCx = N * 0.66, cutCy = N * 0.42, cutR = N * 0.38;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dxM = x + 0.5 - cx, dyM = y + 0.5 - cy;
+      const distM = Math.sqrt(dxM*dxM + dyM*dyM);
+      const dxC = x + 0.5 - cutCx, dyC = y + 0.5 - cutCy;
+      const distC = Math.sqrt(dxC*dxC + dyC*dyC);
+      if (distM <= moonR && distC > cutR) {
+        if (distM > moonR - 1.4) grid[y][x] = 'C';
+        else grid[y][x] = 'W';
+      } else if (distM <= moonR + 1.5 && distC <= cutR) {
+        grid[y][x] = 'B';
+      }
+    }
+  }
+  const stars = [
+    [3, 3, 1], [N-3, 3, 2], [3, N-4, 2], [N-2, N-3, 1],
+    [6, 6, 1], [N-6, 9, 1], [4, N-7, 1], [N-4, N-9, 1],
+    [13, 4, 1], [16, 5, 2], [11, 6, 1], [9, 19, 1], [18, 20, 2],
+  ];
+  for (const [sx, sy, sz] of stars) drawStar(grid, sx, sy, sz);
+  return grid;
+}
+function drawStar(grid, x, y, size) {
+  const N = grid.length;
+  const set = (xx, yy) => { if (xx >= 0 && xx < N && yy >= 0 && yy < N && grid[yy][xx] === 'P') grid[yy][xx] = 'Y'; };
+  set(x, y);
+  if (size >= 1) { set(x-1, y); set(x+1, y); set(x, y-1); set(x, y+1); }
+  if (size >= 2) { set(x-2, y); set(x+2, y); set(x, y-2); set(x, y+2); }
+}
+function countColors(grid) {
+  const c = {};
+  for (const row of grid) for (const ch of row) c[ch] = (c[ch] || 0) + 1;
+  return c;
+}
+
+// Tweak the pattern so every color's pixel count is a multiple of AMMO_STEP (5).
+// This lets us hand out only multiples-of-5 ammo to pigs while keeping the
+// invariant Σ ammo[color] === pixel count[color]. Total cells must already be
+// a multiple of AMMO_STEP (true for 25×25 = 625).
+function adjustPatternToMultiplesOf5(grid) {
+  const N = grid.length;
+  // Adjust each non-P color first by swapping with P cells. P absorbs the
+  // residual and naturally lands on a multiple of 5 because the total is.
+  for (const color of ['B', 'C', 'W', 'Y']) {
+    const counts = countColors(grid);
+    const r = (counts[color] || 0) % AMMO_STEP;
+    if (r === 0) continue;
+    if (r <= 2) {
+      // Drop r cells of this color → P
+      let need = r;
+      for (let y = 0; y < N && need > 0; y++) for (let x = 0; x < N && need > 0; x++) {
+        if (grid[y][x] === color) { grid[y][x] = 'P'; need--; }
+      }
+    } else {
+      // Add (5 - r) cells of this color, taken from P
+      let need = AMMO_STEP - r;
+      for (let y = 0; y < N && need > 0; y++) for (let x = 0; x < N && need > 0; x++) {
+        if (grid[y][x] === 'P') { grid[y][x] = color; need--; }
+      }
+    }
+  }
+}
+
+// ============= PIG GENERATION =============
+// Partition `total` (must be a multiple of `step`) into `count` chunks where
+// each chunk is a multiple of `step` and lies within [step, maxValue].
+function partitionIntoMultiples(total, count, step, maxValue) {
+  const totalUnits = Math.round(total / step);
+  // Even base + distribute the leftover step-units one-per-pig
+  const baseUnits = Math.floor(totalUnits / count);
+  const extraUnits = totalUnits - baseUnits * count;
+  const chunks = [];
+  for (let i = 0; i < count; i++) {
+    chunks.push((baseUnits + (i < extraUnits ? 1 : 0)) * step);
+  }
+  // Add some natural variance: shuttle one step-unit between random chunks
+  const passes = Math.min(count * 2, Math.floor(totalUnits / 2));
+  for (let v = 0; v < passes; v++) {
+    const i = Math.floor(Math.random() * count);
+    const j = Math.floor(Math.random() * count);
+    if (i !== j && chunks[i] > step && chunks[j] < maxValue) {
+      chunks[i] -= step;
+      chunks[j] += step;
+    }
+  }
+  return chunks;
+}
+
+function buildPigs(colorCounts) {
+  const total = Object.values(colorCounts).reduce((a, b) => a + b, 0);
+  const entries = Object.entries(colorCounts).filter(([c, n]) => n > 0);
+
+  // Allocate pig SLOTS per color proportionally
+  const allocation = {};
+  for (const [c, n] of entries) allocation[c] = Math.max(1, Math.round(n / total * NUM_PIGS));
+
+  // Constrain allocation so each color can be evenly split into multiples of 5
+  // within [AMMO_STEP, AMMO_MAX]. min pigs = count/MAX, max pigs = count/STEP.
+  for (const [c, n] of entries) {
+    const minPigs = Math.ceil(n / AMMO_MAX);
+    const maxPigs = Math.floor(n / AMMO_STEP);
+    if (allocation[c] < minPigs) allocation[c] = minPigs;
+    if (allocation[c] > maxPigs) allocation[c] = maxPigs;
+  }
+
+  // Adjust to hit NUM_PIGS, transferring slots between colors that have room
+  let allocated = Object.values(allocation).reduce((a, b) => a + b, 0);
+  while (allocated > NUM_PIGS) {
+    let target = null;
+    for (const [c, n] of entries) {
+      const minPigs = Math.ceil(n / AMMO_MAX);
+      if (allocation[c] > minPigs && (!target || allocation[c] > allocation[target])) target = c;
+    }
+    if (!target) break;
+    allocation[target]--;
+    allocated--;
+  }
+  while (allocated < NUM_PIGS) {
+    let target = null;
+    for (const [c, n] of entries) {
+      const maxPigs = Math.floor(n / AMMO_STEP);
+      if (allocation[c] < maxPigs) {
+        const ratio = colorCounts[c] / allocation[c];
+        if (!target || ratio > colorCounts[target] / allocation[target]) target = c;
+      }
+    }
+    if (!target) break;
+    allocation[target]++;
+    allocated++;
+  }
+
+  // Partition each color's count into ammo chunks (all multiples of 5)
+  const pigs = [];
+  for (const [color, num] of Object.entries(allocation)) {
+    if (num === 0) continue;
+    const chunks = partitionIntoMultiples(colorCounts[color], num, AMMO_STEP, AMMO_MAX);
+    for (const ammo of chunks) pigs.push({ color, ammo });
+  }
+
+  // Shuffle (Fisher-Yates)
+  for (let i = pigs.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pigs[i], pigs[j]] = [pigs[j], pigs[i]];
+  }
+  return pigs;
+}
+
+// ============= BELT (closed loop hugging grid edges, counterclockwise) =============
+let BELT_GEOM = null; // populated after grid is created
+function initBeltGeometry(grid) {
+  const gx = grid.container.x;
+  const gy = grid.container.y;
+  const gw = grid.cellSize * grid.N;
+  const off = BELT_OFFSET;
+  // Counterclockwise from bottom-LEFT entry (where the valve / drop-out sits):
+  // bottom (L→R), right (B→T), top (R→L), left (T→B)
+  const segs = [
+    { edge: 'bottom', a: { x: gx,           y: gy + gw + off }, b: { x: gx + gw,      y: gy + gw + off } },
+    { edge: 'right',  a: { x: gx + gw + off, y: gy + gw },      b: { x: gx + gw + off, y: gy }            },
+    { edge: 'top',    a: { x: gx + gw,      y: gy - off },      b: { x: gx,           y: gy - off }       },
+    { edge: 'left',   a: { x: gx - off,     y: gy },            b: { x: gx - off,     y: gy + gw }        },
+  ];
+  const lens = segs.map(s => Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y));
+  const total = lens.reduce((a,b) => a+b, 0);
+  BELT_GEOM = { segs, lens, total, gx, gy, gw, cell: grid.cellSize, N: grid.N };
+}
+function pointOnBelt(t) {
+  t = t - Math.floor(t); // wrap to [0,1)
+  const target = t * BELT_GEOM.total;
+  let acc = 0;
+  for (let i = 0; i < BELT_GEOM.segs.length; i++) {
+    const seg = BELT_GEOM.segs[i];
+    const len = BELT_GEOM.lens[i];
+    if (acc + len >= target) {
+      const local = (target - acc) / len;
+      return {
+        edge: seg.edge,
+        x: lerp(seg.a.x, seg.b.x, local),
+        y: lerp(seg.a.y, seg.b.y, local),
+      };
+    }
+    acc += len;
+  }
+  const last = BELT_GEOM.segs[BELT_GEOM.segs.length - 1];
+  return { edge: last.edge, x: last.b.x, y: last.b.y };
+}
+const EDGE_ROT = { top: 0, right: Math.PI / 2, bottom: Math.PI, left: -Math.PI / 2 };
+
+// Map pig screen position on belt → grid row/col index
+function gridIndexFromBelt(edge, x, y) {
+  const { gx, gy, cell, N } = BELT_GEOM;
+  if (edge === 'top' || edge === 'bottom') {
+    const col = Math.floor((x - gx) / cell);
+    return clamp(col, 0, N - 1);
+  } else {
+    const row = Math.floor((y - gy) / cell);
+    return clamp(row, 0, N - 1);
+  }
+}
+
+// LoS check: from belt edge looking inward at column/row idx, find first alive cell.
+// Return that cell only if its color matches; else null (LoS blocked or no target).
+function losTarget(grid, edge, idx, color) {
+  if (edge === 'bottom') {
+    for (let row = grid.N - 1; row >= 0; row--) {
+      const cell = grid.cells[row][idx];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'top') {
+    for (let row = 0; row < grid.N; row++) {
+      const cell = grid.cells[row][idx];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'left') {
+    for (let col = 0; col < grid.N; col++) {
+      const cell = grid.cells[idx][col];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'right') {
+    for (let col = grid.N - 1; col >= 0; col--) {
+      const cell = grid.cells[idx][col];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  }
+  return null;
+}
+
+// ============= COLOR HELPERS =============
+function darken(hex, k) {
+  const r = ((hex >> 16) & 0xff) * k, g = ((hex >> 8) & 0xff) * k, b = (hex & 0xff) * k;
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
+function lighten(hex, k) {
+  const r = clamp(((hex >> 16) & 0xff) * k, 0, 255);
+  const g = clamp(((hex >> 8) & 0xff) * k, 0, 255);
+  const b = clamp((hex & 0xff) * k, 0, 255);
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
+
+// ============= DRAWING =============
+// Deterministic pseudo-random so the starfield is identical every frame
+function srand(seed) {
+  let s = seed | 0;
+  return () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 0) % 1e6) / 1e6; };
+}
+
+// Space background: dark gradient + many stars + a few drifting asteroids in the corners
+function drawSpaceBg(g) {
+  // Dark base fill (already painted by COLORS.bg below; this adds vertical gradient feel via overlay rects)
+  for (let i = 0; i < 8; i++) {
+    const a = 0.06 - i * 0.006;
+    g.rect(0, i * (DESIGN_H / 8), DESIGN_W, DESIGN_H / 8).fill({ color: 0x1c1f55, alpha: a });
+  }
+
+  // Stars — many small dots, deterministic seed so they don't shift between draws
+  const rnd = srand(1337);
+  for (let i = 0; i < 220; i++) {
+    const x = rnd() * DESIGN_W;
+    const y = rnd() * DESIGN_H;
+    const r = 0.6 + rnd() * 1.6;
+    const a = 0.4 + rnd() * 0.6;
+    g.circle(x, y, r).fill({ color: 0xffffff, alpha: a });
+  }
+  // A few brighter "twinkle" stars with a soft glow halo
+  for (let i = 0; i < 14; i++) {
+    const x = rnd() * DESIGN_W;
+    const y = rnd() * DESIGN_H;
+    g.circle(x, y, 4).fill({ color: 0x6cd5e8, alpha: 0.18 });
+    g.circle(x, y, 1.6).fill({ color: 0xffffff, alpha: 0.95 });
+  }
+  // Tiny 4-point sparkle stars (cross shape)
+  for (let i = 0; i < 6; i++) {
+    const x = rnd() * DESIGN_W;
+    const y = rnd() * DESIGN_H;
+    const s = 3 + rnd() * 2;
+    g.moveTo(x - s, y).lineTo(x + s, y).stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
+    g.moveTo(x, y - s).lineTo(x, y + s).stroke({ color: 0xffffff, width: 1, alpha: 0.6 });
+  }
+
+  // Drifting asteroids in background (silhouettes — never overlap the play area)
+  const asteroids = [
+    { x:  60, y:  80, r: 38 }, { x: 690, y: 110, r: 28 },
+    { x:  40, y: 480, r: 44 }, { x: 700, y: 540, r: 36 },
+    { x:  90, y: 880, r: 26 }, { x: 670, y: 920, r: 30 },
+    { x: 130, y: 1280, r: 22 }, { x: 640, y: 1240, r: 32 },
+  ];
+  for (const a of asteroids) drawBgAsteroid(g, a.x, a.y, a.r);
+}
+
+function drawBgAsteroid(g, cx, cy, r) {
+  // Body — bumpy circle approximated with one filled circle + a few craters
+  g.circle(cx, cy, r).fill({ color: 0x2a3258, alpha: 0.85 });
+  g.circle(cx - r * 0.25, cy - r * 0.3, r * 0.85).fill({ color: 0x3a4470, alpha: 0.55 });
+  // Craters
+  g.circle(cx - r * 0.3, cy + r * 0.1, r * 0.18).fill({ color: 0x161a35, alpha: 0.7 });
+  g.circle(cx + r * 0.35, cy - r * 0.2, r * 0.12).fill({ color: 0x161a35, alpha: 0.7 });
+  g.circle(cx + r * 0.05, cy + r * 0.45, r * 0.1).fill({ color: 0x161a35, alpha: 0.7 });
+  // Highlight
+  g.circle(cx - r * 0.55, cy - r * 0.45, r * 0.18).fill({ color: 0x6c7aab, alpha: 0.45 });
+}
+
+function drawFrame(g) {
+  const x = FRAME.x, y = FRAME.y, w = FRAME.w, h = FRAME.h;
+  // Outer panel
+  g.roundRect(x, y, w, h, 28).fill(COLORS.frame);
+  // Inner darker recess (where asteroid grid sits)
+  g.roundRect(x + 16, y + 16, w - 32, h - 32, 22).fill(COLORS.frameLo);
+  // Glowing inner edge
+  g.roundRect(x + 50, y + 50, w - 100, h - 100, 8).stroke({ color: COLORS.frameHi, width: 4, alignment: 0 });
+  // Sci-fi corner brackets — L-shapes hugging the panel corners
+  const br = 22;     // bracket reach
+  const bw = 4;      // bracket stroke
+  const off = 8;     // offset from panel corner
+  const drawBracket = (cx, cy, dx, dy) => {
+    g.moveTo(cx, cy + dy * br).lineTo(cx, cy).lineTo(cx + dx * br, cy)
+     .stroke({ color: COLORS.frameHi, width: bw, cap: 'round', join: 'round' });
+  };
+  drawBracket(x + off,         y + off,         +1, +1);
+  drawBracket(x + w - off,     y + off,         -1, +1);
+  drawBracket(x + off,         y + h - off,     +1, -1);
+  drawBracket(x + w - off,     y + h - off,     -1, -1);
+  // Tiny corner rivets / lights
+  for (const [rx, ry] of [[x + 28, y + 28], [x + w - 28, y + 28], [x + 28, y + h - 28], [x + w - 28, y + h - 28]]) {
+    g.circle(rx, ry, 3).fill(COLORS.frameHi);
+  }
+}
+function drawBelt(g, geom) {
+  // HUD path indicator — a thin dashed cyan border tracing the ship's flight
+  // path around the asteroid field. Pure UI marker (no thick "track" feel).
+  // Direction arrows are drawn separately in BeltArrows.
+  const total = BELT_GEOM.total;
+  const dashCount = 56;          // segments around the loop
+  const dashLen = 12;            // length of each visible dash
+  for (let i = 0; i < dashCount; i++) {
+    const t = i / dashCount;
+    const pt = pointOnBelt(t);
+    const tangent = { top: { x: -1, y: 0 }, bottom: { x: 1, y: 0 }, left: { x: 0, y: 1 }, right: { x: 0, y: -1 } }[pt.edge];
+    const ax = pt.x - tangent.x * dashLen * 0.5;
+    const ay = pt.y - tangent.y * dashLen * 0.5;
+    const bx = pt.x + tangent.x * dashLen * 0.5;
+    const by = pt.y + tangent.y * dashLen * 0.5;
+    // Soft outer glow
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ color: 0x6cd5e8, width: 5, alpha: 0.18, cap: 'round' });
+    // Bright core
+    g.moveTo(ax, ay).lineTo(bx, by).stroke({ color: 0x6cd5e8, width: 2.5, alpha: 0.95, cap: 'round' });
+  }
+}
+function drawSlotBar(container) {
+  // Sci-fi hangar bays — clipped-corner panels with a glowing inner ring
+  for (let i = 0; i < NUM_SLOTS; i++) {
+    const g = new PIXI.Graphics();
+    const x = SLOT_X0 + i * (SLOT_W + SLOT_GAP);
+    const y = SLOT_ROW_Y - SLOT_W / 2;
+    const w = SLOT_W, h = SLOT_W, k = 16; // k = corner cut size
+    // Octagonal "hangar" outline (rounded rect with bevel hint)
+    g.poly([
+      x + k, y,
+      x + w - k, y,
+      x + w, y + k,
+      x + w, y + h - k,
+      x + w - k, y + h,
+      x + k, y + h,
+      x, y + h - k,
+      x, y + k,
+    ]).fill(COLORS.benchSlot);
+    // Inner border glow
+    g.poly([
+      x + k + 4, y + 4,
+      x + w - k - 4, y + 4,
+      x + w - 4, y + k + 4,
+      x + w - 4, y + h - k - 4,
+      x + w - k - 4, y + h - 4,
+      x + k + 4, y + h - 4,
+      x + 4, y + h - k - 4,
+      x + 4, y + k + 4,
+    ]).stroke({ color: COLORS.benchSlotBorder, width: 2 });
+    // Two tiny status lights on the bottom edge
+    g.circle(x + w * 0.35, y + h - 8, 2.5).fill(0x6cd5e8);
+    g.circle(x + w * 0.65, y + h - 8, 2.5).fill(0xffd24a);
+    container.addChild(g);
+  }
+}
+function drawHeader(container, audio) {
+  const t = new PIXI.Text({
+    text: 'ASTEROID\nBLAST',
+    style: { fontSize: 60, fontWeight: 900, fill: 0x6cd5e8, stroke: { color: 0x05081a, width: 8 }, lineHeight: 56, letterSpacing: 1 }
+  });
+  t.position.set(34, 36);
+  container.addChild(t);
+
+  // Mute toggle — small speaker icon top-center
+  if (audio) {
+    const mute = new PIXI.Container();
+    const ring = new PIXI.Graphics();
+    ring.circle(0, 0, 26).fill(0x2c2c40).stroke({ color: 0x55557a, width: 3 });
+    mute.addChild(ring);
+    const drawIcon = () => {
+      ring.clear();
+      ring.circle(0, 0, 26).fill(0x2c2c40).stroke({ color: 0x55557a, width: 3 });
+      // Speaker body
+      ring.roundRect(-12, -7, 8, 14, 1.5).fill(0xe0e0f0);
+      ring.moveTo(-4, -7).lineTo(4, -12).lineTo(4, 12).lineTo(-4, 7).fill(0xe0e0f0);
+      if (audio.muted) {
+        // Red slash across the icon
+        ring.moveTo(-15, -15).lineTo(15, 15).stroke({ color: 0xff5b3a, width: 4, cap: 'round' });
+      } else {
+        // Sound waves
+        ring.arc(8, 0, 4, -0.6, 0.6).stroke({ color: 0xe0e0f0, width: 2 });
+        ring.arc(8, 0, 8, -0.6, 0.6).stroke({ color: 0xe0e0f0, width: 2 });
+      }
+    };
+    drawIcon();
+    mute.position.set(DESIGN_W / 2, 60);
+    mute.eventMode = 'static';
+    mute.cursor = 'pointer';
+    mute.on('pointertap', () => {
+      audio.bootstrap();           // ensure ctx exists, then toggle mute
+      audio.setMuted(!audio.muted);
+      drawIcon();
+    });
+    container.addChild(mute);
+  }
+
+  const ctaG = new PIXI.Graphics();
+  ctaG.roundRect(0, 0, 230, 92, 22).fill(0xffc940);
+  ctaG.roundRect(4, 4, 222, 84, 18).stroke({ color: 0xc8951a, width: 4 });
+  const ctaText = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 32, fontWeight: 900, fill: 0x1f2233 } });
+  ctaText.anchor.set(0.5);
+  ctaText.position.set(115, 46);
+  ctaG.addChild(ctaText);
+  ctaG.pivot.set(115, 46);
+  ctaG.position.set(DESIGN_W - 230 - 30 + 115, 50 + 46);
+  ctaG.eventMode = 'static';
+  ctaG.cursor = 'pointer';
+  ctaG.on('pointertap', () => {
+    if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+    else window.open('https://example.com', '_blank');
+  });
+  let pulseT = 0;
+  container._ctaTick = () => { pulseT += 0.05; ctaG.scale.set(1 + Math.sin(pulseT) * 0.04); };
+  container.addChild(ctaG);
+}
+// ========== Spaceship view (single triangular sprite, rotated by edge) ==========
+// LESSON LEARNED FROM ORIGINAL: keep the sprite's nose pointing UP at rotation 0.
+// We then rotate the WHOLE container per edge to face inward (toward the
+// asteroid grid). One sprite is enough — no per-view redraws needed because
+// a triangular ship reads correctly from any angle when rotated.
+//
+//   bottom edge: ship sits below grid, nose UP   → rotation = 0
+//   top    edge: ship sits above grid, nose DOWN → rotation = π
+//   right  edge: ship sits right of grid, nose ← → rotation = -π/2
+//   left   edge: ship sits left of grid, nose →  → rotation = +π/2
+//
+// Body design: a triangular hull with a slight notch at the back for engines,
+// a glowing cockpit dot near the nose, side fins, and an exhaust tail. Color
+// codes the team (P/B/W/C/Y) — same gameplay invariant as the original.
+function drawShip(g, colorKey) {
+  const tint   = PIG_TINTS[colorKey];
+  const dark   = darken(tint, 0.55);
+  const darker = darken(tint, 0.42);
+  const light  = lighten(tint, 1.30);
+  const accent = 0x1a1a22;
+  const cockpit = 0x6cd5e8;
+
+  // Engine glow (drawn first, behind hull) — soft halo at the back
+  g.circle(0, 30, 14).fill({ color: 0xff7a3a, alpha: 0.35 });
+  g.circle(0, 28, 8).fill({ color: 0xffd24a, alpha: 0.55 });
+
+  // Side fins — small wings sticking out below the main hull
+  g.moveTo(-30, 14).lineTo(-22, 28).lineTo(-16, 22).closePath().fill(dark);
+  g.moveTo( 30, 14).lineTo( 22, 28).lineTo( 16, 22).closePath().fill(dark);
+
+  // Main hull — chunky triangle (nose UP)
+  g.moveTo(0, -34).lineTo(-26, 22).lineTo(26, 22).closePath().fill(tint);
+
+  // Hull shading — darker bottom band to suggest 3D shape
+  g.moveTo(-26, 22).lineTo(26, 22).lineTo(20, 14).lineTo(-20, 14).closePath().fill(dark);
+
+  // Top-left highlight stripe (consistent light from above-front-left)
+  g.moveTo(0, -30).lineTo(-12, 0).lineTo(-4, 0).lineTo(0, -22).closePath().fill(light);
+
+  // Hull outline for definition
+  g.moveTo(0, -34).lineTo(-26, 22).lineTo(26, 22).closePath()
+   .stroke({ color: darker, width: 2, join: 'round' });
+
+  // Cockpit window — glowing cyan dome near the nose
+  g.circle(0, -10, 7).fill(accent);
+  g.circle(0, -10, 5).fill(cockpit);
+  g.circle(-1, -12, 2).fill({ color: 0xffffff, alpha: 0.9 });
+
+  // Engine nozzles — two black exhaust ports at the back
+  g.roundRect(-12, 18, 7, 8, 1.5).fill(accent);
+  g.roundRect(  5, 18, 7, 8, 1.5).fill(accent);
+  g.roundRect(-11, 19, 5, 5, 1).fill({ color: 0xff7a3a, alpha: 0.8 });
+  g.roundRect(  6, 19, 5, 5, 1).fill({ color: 0xff7a3a, alpha: 0.8 });
+
+  // White outline rim for the white ship variant (otherwise it disappears on bg)
+  if (colorKey === 'W') {
+    g.moveTo(0, -34).lineTo(-26, 22).lineTo(26, 22).closePath()
+     .stroke({ color: 0xc8c8d8, width: 1.5, join: 'round' });
+  }
+}
+
+// ============= SHIP (formerly Pig — internal name kept for minimal diff) =============
+// Triangular spaceship — a single body sprite, rotated so the ship's nose
+// points along its DIRECTION OF TRAVEL on the HUD path (not toward the grid).
+// The asteroid grid sits to the ship's LEFT side, so lasers naturally exit
+// from the ship's left flank. Bench/slot default is "nose up" (rotation 0)
+// — same as the right edge, which keeps the docked look identical to before.
+//
+//   bottom edge (L→R): nose RIGHT → rotation +π/2
+//   right  edge (B→T): nose UP    → rotation  0
+//   top    edge (R→L): nose LEFT  → rotation -π/2
+//   left   edge (T→B): nose DOWN  → rotation  π
+const EDGE_SHIP_ROT = {
+  bottom:  Math.PI / 2,
+  right:   0,
+  top:    -Math.PI / 2,
+  left:    Math.PI,
+};
+
+class Pig {
+  constructor(color, ammo) {
+    this.color = color;
+    this.ammo = ammo;
+    this.maxAmmo = ammo;
+    this.state = 'bench'; // bench | toBelt | lapping | toSlot | inSlot | vanishing | dead
+    this.beltT = 0;       // 0..1 lap progress (only meaningful when lapping)
+    this.lastFireIdx = -1;   // last col/row where this ship fired
+    this.lastFireEdge = null;
+    this.pendingBullets = 0; // lasers in flight whose cell hasn't been destroyed yet
+    this.benchRow = -1;
+    this.benchCol = -1;
+    this.slotIdx = -1;
+
+    this.container = new PIXI.Container();
+    // bodyWrap holds the rotation (per edge) so it doesn't conflict
+    // with `body.scale` which is used for squash & stretch on each shot.
+    this.bodyWrap = new PIXI.Container();
+    this.body = new PIXI.Graphics();
+    drawShip(this.body, this.color);
+    this.bodyWrap.addChild(this.body);
+    this.container.addChild(this.bodyWrap);
+    this._lastEdge = null;
+    this.bodyWrap.rotation = 0; // bench/slot default = nose up
+
+    this.label = new PIXI.Text({
+      text: String(ammo),
+      style: { fontSize: 32, fontWeight: 900, fill: 0xffffff, stroke: { color: 0x1f2233, width: 5 }, fontFamily: 'sans-serif' }
+    });
+    this.label.anchor.set(0.5);
+    this.label.position.set(0, -62);
+    this.container.addChild(this.label);
+
+    this.container.eventMode = 'static';
+    this.container.cursor = 'pointer';
+  }
+
+  // Compatibility shim — old code calls setView('back'/'front'/'side', ...).
+  // For ships we treat 'back' as the DOCKED orientation (nose up) used in
+  // bench/slot. Other views aren't actually used anymore but we keep them
+  // mapped to edges for safety.
+  setView(view, mirrored = false) {
+    if (view === 'back') {
+      // Docked — nose up regardless of which edge the ship came from
+      this._lastEdge = '_docked';
+      this.bodyWrap.rotation = 0;
+      tween.killOf(this.body.scale, ['x', 'y']);
+      this.body.scale.set(1, 1);
+      return;
+    }
+    let edge = 'bottom';
+    if (view === 'front') edge = 'top';
+    else if (view === 'side') edge = mirrored ? 'left' : 'right';
+    this.setEdge(edge);
+  }
+  setAmmo(n) { this.ammo = n; this.label.text = String(n); }
+  popLabel() { this.label.scale.set(1.4); tween.add(this.label.scale, { x: 1, y: 1 }, 200, easeOut); }
+  popBody() { this.body.scale.set(0.85); tween.add(this.body.scale, { x: 1, y: 1 }, 220, easeOutBack); }
+  resetFiring() { this.lastFireIdx = -1; this.lastFireEdge = null; }
+  setEdge(edge) {
+    if (this._lastEdge === edge) return;
+    this._lastEdge = edge;
+    this.bodyWrap.rotation = EDGE_SHIP_ROT[edge] ?? 0;
+    // Reset squash so the new orientation renders at natural size
+    tween.killOf(this.body.scale, ['x', 'y']);
+    this.body.scale.set(1, 1);
+  }
+}
+
+// ============= ASTEROID CELL =============
+// Each asteroid tile is a chunky 3D block (same footprint as before so the
+// gameplay LoS math is unchanged) with subtle crater dots etched into the top
+// face. Color tints the rock per "team", same as the original pixel art.
+class PixelCell {
+  constructor(color, x, y, size) {
+    this.color = color;
+    this.alive = color !== null;
+    this.gx = x;
+    this.gy = y;
+    this.size = size;
+    this.sprite = new PIXI.Graphics();
+    if (this.alive) {
+      const c = COLORS[color];
+      const dark = darken(c, 0.55);
+      const darker = darken(c, 0.40);
+      const light = lighten(c, 1.3);
+      const SHADOW = 5; // 3D extruded depth (asteroid "rock" look)
+      // Bottom face (darker, offset down)
+      this.sprite.roundRect(0, SHADOW, size - 1, size - 1, 4).fill(dark);
+      // Top face — asteroid rock surface
+      this.sprite.roundRect(0, 0, size - 1, size - 1, 4).fill(c);
+      // Top sheen — subtle highlight strip
+      this.sprite.roundRect(2, 2, size - 5, 3, 1.5).fill(light);
+      // Crater pits — deterministic per (x,y) so they don't flicker
+      const seed = (x * 73856093) ^ (y * 19349663);
+      const rnd = srand(seed);
+      const pit = (px, py, pr) => {
+        this.sprite.circle(px, py, pr).fill(darker);
+        this.sprite.circle(px - pr * 0.3, py - pr * 0.3, pr * 0.45).fill(dark);
+      };
+      // 1-2 small craters depending on rng — keeps tiles from looking uniform
+      if (rnd() < 0.55) pit(size * (0.25 + rnd() * 0.5), size * (0.45 + rnd() * 0.35), Math.max(1.5, size * 0.10));
+      if (rnd() < 0.30) pit(size * (0.15 + rnd() * 0.7), size * (0.20 + rnd() * 0.3), Math.max(1, size * 0.06));
+    }
+  }
+  // worldPos = world-space center of this cell (so particles spawn on top of the tile,
+  // not at grid-local coords which appear shifted relative to the fxLayer).
+  // Explosion: bright orange/yellow flash + colored debris chunks scattering outward.
+  destroyCell(scene, worldPos) {
+    if (!this.sprite || this.sprite.destroyed) return;
+    const cx = worldPos.x;
+    const cy = worldPos.y;
+
+    // Bright central flash — a quick scaling ring
+    const flash = new PIXI.Graphics();
+    flash.circle(0, 0, 18).fill({ color: 0xffe070, alpha: 0.95 });
+    flash.circle(0, 0, 10).fill({ color: 0xffffff, alpha: 0.95 });
+    flash.position.set(cx, cy);
+    scene.addChild(flash);
+    tween.add(flash.scale, { x: 2.2, y: 2.2 }, 280, easeOut);
+    tween.add(flash, { alpha: 0 }, 280, easeOut, () => flash.destroy());
+
+    // Outer shockwave ring
+    const ring = new PIXI.Graphics();
+    ring.circle(0, 0, 14).stroke({ color: 0xff8a3a, width: 3, alpha: 0.85 });
+    ring.position.set(cx, cy);
+    scene.addChild(ring);
+    tween.add(ring.scale, { x: 3.0, y: 3.0 }, 380, easeOut);
+    tween.add(ring, { alpha: 0 }, 380, easeOut, () => ring.destroy());
+
+    // Asteroid debris chunks — colored to match the rock
+    const c = COLORS[this.color];
+    for (let i = 0; i < 8; i++) {
+      const p = new PIXI.Graphics();
+      const sz = 3 + Math.random() * 4;
+      // Random small chunky shape (rect for "rock" feel)
+      p.rect(-sz, -sz, sz * 2, sz * 2).fill(c);
+      p.rect(-sz, -sz, sz * 2, sz * 1).fill(lighten(c, 1.2));
+      p.position.set(cx, cy);
+      p.rotation = Math.random() * Math.PI * 2;
+      scene.addChild(p);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 28 + Math.random() * 28;
+      tween.add(p.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 480, easeOut);
+      tween.add(p, { alpha: 0, rotation: p.rotation + Math.random() * 4 - 2 }, 480, easeOut, () => p.destroy());
+      tween.add(p.scale, { x: 0.2, y: 0.2 }, 480, easeOut);
+    }
+    // A few orange spark dots for that "explosion" feel
+    for (let i = 0; i < 5; i++) {
+      const p = new PIXI.Graphics();
+      p.circle(0, 0, 2 + Math.random() * 2).fill(0xffd24a);
+      p.position.set(cx, cy);
+      scene.addChild(p);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 18 + Math.random() * 22;
+      tween.add(p.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 360, easeOut);
+      tween.add(p, { alpha: 0 }, 360, easeOut, () => p.destroy());
+    }
+
+    // Cell sprite collapses in its own (grid-local) coord system.
+    this.sprite.pivot.set(this.size / 2, this.size / 2);
+    this.sprite.position.set(this.sprite.position.x + this.size / 2, this.sprite.position.y + this.size / 2);
+    tween.add(this.sprite.scale, { x: 0, y: 0 }, 200, easeOut, () => { if (this.sprite) this.sprite.destroy(); });
+  }
+}
+
+// ============= PIXEL GRID =============
+class PixelGrid {
+  constructor(pattern) {
+    this.container = new PIXI.Container();
+    this.pattern = pattern;
+    this.N = pattern.length;
+    this.cellSize = Math.floor((FRAME.w - 100) / this.N);
+    this.cells = [];
+    this.cellsByColor = {};
+
+    const bg = new PIXI.Graphics();
+    bg.roundRect(0, 0, this.cellSize * this.N + 4, this.cellSize * this.N + 4, 6).fill(COLORS.bgDark);
+    bg.position.set(-2, -2);
+    this.container.addChild(bg);
+
+    for (let y = 0; y < this.N; y++) {
+      const row = [];
+      for (let x = 0; x < this.N; x++) {
+        const ch = pattern[y][x];
+        const cell = new PixelCell(ch, x, y, this.cellSize);
+        cell.sprite.position.set(x * this.cellSize, y * this.cellSize);
+        if (cell.alive) {
+          this.container.addChild(cell.sprite);
+          (this.cellsByColor[ch] ||= []).push(cell);
+        }
+        row.push(cell);
+      }
+      this.cells.push(row);
+    }
+  }
+  // Mark cell as dead immediately (LoS purposes); return its world position for bullet target
+  reserveAndKill(cell) {
+    cell.alive = false;
+    const arr = this.cellsByColor[cell.color];
+    if (arr) {
+      const i = arr.indexOf(cell);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  }
+  worldPosOfCell(cell) {
+    return {
+      x: this.container.x + cell.gx * this.cellSize + this.cellSize / 2,
+      y: this.container.y + cell.gy * this.cellSize + this.cellSize / 2,
+    };
+  }
+  remainingCount() {
+    return Object.values(this.cellsByColor).reduce((a, b) => a + b.length, 0);
+  }
+}
+
+// ============= BENCH (4 INDEPENDENT COLUMN QUEUES) =============
+// Each column is its own FIFO stack. Picking the top of column C only shifts
+// column C upward; columns A/B/D are untouched.
+class Bench {
+  constructor(cols) {
+    this.container = new PIXI.Container();
+    this.mask = new PIXI.Graphics();
+    this.mask
+      .rect(BENCH.x - 70, BENCH.y - 25, BENCH.colW * BENCH_COLS + 140, BENCH.rowH * BENCH_VISIBLE_ROWS - 8)
+      .fill(0xffffff);
+    this.container.addChild(this.mask);
+    this.scrollLayer = new PIXI.Container();
+    this.scrollLayer.mask = this.mask;
+    this.container.addChild(this.scrollLayer);
+
+    this.cols = cols; // cols[colIdx] = [pigs..] with index 0 = top of column
+    this.onPick = null;
+
+    for (let c = 0; c < BENCH_COLS; c++) {
+      for (let r = 0; r < this.cols[c].length; r++) {
+        const pig = this.cols[c][r];
+        pig.benchRow = r;
+        pig.benchCol = c;
+        this.placeAt(pig, r, c, false);
+        pig.container.on('pointertap', () => this._onTap(pig));
+        this.scrollLayer.addChild(pig.container);
+        if (r >= BENCH_VISIBLE_ROWS) pig.container.alpha = 0.6;
+      }
+    }
+  }
+  // Backwards-compat flat list for hint targeting etc.
+  get pigs() {
+    const out = [];
+    for (let c = 0; c < BENCH_COLS; c++) for (const p of this.cols[c]) out.push(p);
+    return out;
+  }
+  placeAt(pig, row, col, animated) {
+    const px = BENCH.x + col * BENCH.colW + BENCH.colW / 2;
+    const py = BENCH.y + row * BENCH.rowH + BENCH.rowH / 2;
+    if (animated) {
+      tween.killOf(pig.container.position, ['x', 'y']);
+      tween.add(pig.container.position, { x: px, y: py }, BENCH_REFLOW_MS, easeOut);
+      tween.add(pig.container, { alpha: row < BENCH_VISIBLE_ROWS ? 1 : 0.6 }, BENCH_REFLOW_MS, easeOut);
+    } else {
+      pig.container.position.set(px, py);
+    }
+  }
+  _onTap(pig) {
+    if (pig.state !== 'bench') return;
+    if (pig.benchRow !== 0) return; // only top of column pickable
+    if (this.onPick) this.onPick(pig);
+  }
+  removePig(pig) {
+    const c = pig.benchCol;
+    const idx = this.cols[c].indexOf(pig);
+    if (idx < 0) return;
+    this.cols[c].splice(idx, 1);
+    // Shift remaining pigs in THIS column up by 1; other columns untouched.
+    for (let r = 0; r < this.cols[c].length; r++) {
+      const p = this.cols[c][r];
+      p.benchRow = r;
+      p.benchCol = c;
+      this.placeAt(p, r, c, true);
+    }
+  }
+}
+
+// Build a 4×9 bench layout honoring color constraints:
+//   row 0: NO purple pigs
+//   row 1: at least 1 purple pig
+//   row 2: at least 3 purple pigs
+//   rows 3-8: random distribution of remaining pigs (round-robin per column)
+function buildBenchLayout(allPigs) {
+  const purple = allPigs.filter(p => p.color === 'P');
+  const others = allPigs.filter(p => p.color !== 'P');
+  const shuf = arr => { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } };
+  shuf(purple); shuf(others);
+
+  const cols = [[], [], [], []];
+
+  // Row 0: 4 non-purple
+  for (let c = 0; c < BENCH_COLS; c++) {
+    cols[c].push(others.shift() || purple.shift());
+  }
+
+  // Row 1: 1 purple + 3 non-purple (random column for the purple)
+  const r1Purple = Math.floor(Math.random() * BENCH_COLS);
+  for (let c = 0; c < BENCH_COLS; c++) {
+    if (c === r1Purple) cols[c].push(purple.shift() || others.shift());
+    else cols[c].push(others.shift() || purple.shift());
+  }
+
+  // Row 2: 3 purple + 1 non-purple (random column for the non-purple)
+  const r2NonPurple = Math.floor(Math.random() * BENCH_COLS);
+  for (let c = 0; c < BENCH_COLS; c++) {
+    if (c === r2NonPurple) cols[c].push(others.shift() || purple.shift());
+    else cols[c].push(purple.shift() || others.shift());
+  }
+
+  // Rows 3-8: distribute remaining round-robin across columns (so each column has 9)
+  const remaining = [...purple, ...others];
+  shuf(remaining);
+  let c = 0;
+  while (remaining.length) {
+    cols[c].push(remaining.shift());
+    c = (c + 1) % BENCH_COLS;
+  }
+  return cols;
+}
+
+// ============= SLOTS =============
+class Slots {
+  constructor() {
+    this.container = new PIXI.Container();
+    this.slots = new Array(NUM_SLOTS).fill(null);
+    this.onRelease = null;
+  }
+  firstFree() { for (let i = 0; i < NUM_SLOTS; i++) if (!this.slots[i]) return i; return -1; }
+  isFull() { return this.slots.every(s => s !== null); }
+  pos(i) { return { x: SLOT_X0 + i * (SLOT_W + SLOT_GAP) + SLOT_W / 2, y: SLOT_ROW_Y }; }
+  occupy(pig, idx) {
+    this.slots[idx] = pig;
+    pig.slotIdx = idx;
+    pig.container.off('pointertap');
+    pig.container.on('pointertap', () => {
+      if (pig.state === 'inSlot' && this.onRelease) this.onRelease(pig);
+    });
+  }
+  vacate(pig) {
+    const idx = this.slots.indexOf(pig);
+    if (idx < 0) return;
+    this.slots[idx] = null;
+    pig.slotIdx = -1;
+    // Reflow: shift right→left into the gap, killing any old position tween first
+    for (let i = idx + 1; i < NUM_SLOTS; i++) {
+      const p = this.slots[i];
+      if (p) {
+        this.slots[i - 1] = p; this.slots[i] = null;
+        p.slotIdx = i - 1;
+        if (p.state === 'inSlot') {
+          tween.killOf(p.container.position, ['x', 'y']);
+          tween.add(p.container.position, this.pos(i - 1), SLOT_REFLOW_MS, easeOut);
+        }
+      }
+    }
+  }
+}
+
+// ============= AUDIO ENGINE (procedural — Web Audio API) =============
+// All sound is synthesized at runtime: no external audio files (MRAID-friendly).
+// AudioContext is suspended until the first user interaction, satisfying both
+// browser autoplay rules and AppLovin's "muted by default" requirement.
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.musicPlaying = false;
+    this._started = false;
+  }
+
+  bootstrap() {
+    if (this._started) return;
+    this._started = true;
+    this.init().then(() => this.startMusic());
+  }
+
+  async init() {
+    if (this.ctx) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      this.ctx = new Ctx();
+      if (this.ctx.state === 'suspended') await this.ctx.resume();
+    } catch (e) { return; }
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.6;
+    this.master.connect(this.ctx.destination);
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.value = 0.16;
+    this.musicGain.connect(this.master);
+    this.sfxGain = this.ctx.createGain();
+    this.sfxGain.gain.value = 0.45;
+    this.sfxGain.connect(this.master);
+  }
+
+  setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.6; }
+
+  // Casual chiptune-y loop in C major pentatonic — 16-beat segment scheduled
+  // recursively. Pieces: walking bass + lead melody + soft kick + hi-hat.
+  startMusic() {
+    if (!this.ctx || this.musicPlaying) return;
+    this.musicPlaying = true;
+    this._musicNext = this.ctx.currentTime + 0.05;
+    this._scheduleMusic();
+  }
+
+  _scheduleMusic() {
+    if (!this.musicPlaying || !this.ctx) return;
+    const beat = 60 / 110; // 110 BPM
+    const segBeats = 16;
+    const t0 = this._musicNext;
+
+    // Bass — one root note every 4 beats: C2 → F2 → G2 → C2
+    const bassNotes = [65.4, 87.3, 98.0, 65.4];
+    for (let i = 0; i < bassNotes.length; i++) {
+      this._tone(t0 + i * 4 * beat, beat * 3.7, bassNotes[i], 'sawtooth', 0.22, 'music');
+    }
+
+    // Lead — pentatonic phrase, 1 note per beat
+    const C5 = 523.25, D5 = 587.33, E5 = 659.25, G5 = 783.99, A5 = 880;
+    const lead = [
+      C5, E5, G5, E5,
+      A5, G5, E5, D5,
+      C5, G5, A5, G5,
+      E5, D5, C5, 0,
+    ];
+    for (let i = 0; i < lead.length; i++) {
+      if (lead[i] === 0) continue;
+      this._tone(t0 + i * beat, beat * 0.82, lead[i], 'square', 0.13, 'music');
+    }
+
+    // Kick on every 4th beat (1, 5, 9, 13)
+    for (let i = 0; i < segBeats; i += 4) this._kick(t0 + i * beat);
+    // Hat on the off-beats (.5 of every other beat)
+    for (let i = 0; i < segBeats; i += 2) this._hat(t0 + (i + 0.5) * beat);
+
+    this._musicNext = t0 + segBeats * beat;
+    // Schedule next segment 1.5s before the current ends, for seamless loop
+    const lookaheadMs = 1500;
+    const nextDelay = Math.max(0, (segBeats * beat) * 1000 - lookaheadMs);
+    setTimeout(() => this._scheduleMusic(), nextDelay);
+  }
+
+  _tone(when, dur, freq, type, amp, channel) {
+    if (!this.ctx) return;
+    const dest = channel === 'music' ? this.musicGain : this.sfxGain;
+    const osc = this.ctx.createOscillator();
+    osc.type = type; osc.frequency.value = freq;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(amp, when + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(g); g.connect(dest);
+    osc.start(when); osc.stop(when + dur + 0.02);
+  }
+
+  _kick(when) {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(140, when);
+    osc.frequency.exponentialRampToValueAtTime(40, when + 0.12);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.5, when);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.14);
+    osc.connect(g); g.connect(this.musicGain);
+    osc.start(when); osc.stop(when + 0.16);
+  }
+
+  _hat(when) {
+    if (!this.ctx) return;
+    const dur = 0.05, sr = this.ctx.sampleRate;
+    const bufLen = Math.floor(sr * dur);
+    const buf = this.ctx.createBuffer(1, bufLen, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filt = this.ctx.createBiquadFilter(); filt.type = 'highpass'; filt.frequency.value = 7000;
+    const g = this.ctx.createGain(); g.gain.value = 0.16;
+    src.connect(filt); filt.connect(g); g.connect(this.musicGain);
+    src.start(when);
+  }
+
+  // ---------- SFX ----------
+  playShoot() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.exponentialRampToValueAtTime(220, t + 0.07);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.11);
+  }
+
+  playDestroy() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const dur = 0.09, sr = this.ctx.sampleRate;
+    const bufLen = Math.floor(sr * dur);
+    const buf = this.ctx.createBuffer(1, bufLen, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filt = this.ctx.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = 2200; filt.Q.value = 2;
+    const g = this.ctx.createGain(); g.gain.value = 0.32;
+    src.connect(filt); filt.connect(g); g.connect(this.sfxGain);
+    src.start(t);
+  }
+
+  playVanish() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [880, 1320, 1760, 2200].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.04;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.16, s + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.18);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.2);
+    });
+  }
+
+  playDeploy() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(660, t + 0.14);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.18, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.18);
+  }
+
+  playLand() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.09);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.13);
+  }
+
+  playWin() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'square'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.1;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.2, s + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.5);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.55);
+    });
+  }
+
+  playLose() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [440, 392, 330, 247].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'square'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.13;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.2, s + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.4);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.45);
+    });
+  }
+}
+
+// ============= HUD PATH CHEVRONS (marching loop) =============
+// Glowing cyan chevrons that pulse along the HUD path showing CCW flow.
+class BeltArrows {
+  constructor() {
+    this.container = new PIXI.Container();
+    this.NUM = 18;
+    this.arrows = [];
+    for (let i = 0; i < this.NUM; i++) {
+      const a = new PIXI.Graphics();
+      // Glow layer (wider, soft)
+      a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
+        .stroke({ color: 0x6cd5e8, width: 8, alpha: 0.25, cap: 'round', join: 'round' });
+      // Core bright chevron
+      a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
+        .stroke({ color: 0x6cd5e8, width: 3, cap: 'round', join: 'round' });
+      // Inner highlight
+      a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
+        .stroke({ color: 0xffffff, width: 1.2, alpha: 0.9, cap: 'round', join: 'round' });
+      this.arrows.push(a);
+      this.container.addChild(a);
+    }
+    this.t = 0;
+  }
+  update(deltaMS) {
+    // Chevrons march at HALF the belt speed for a less hectic visual rhythm
+    this.t = (this.t + deltaMS / ARROW_LOOP_MS) % 1;
+    // Rotation per edge, pointing in CCW direction of motion
+    const ROT = { bottom: 0, right: -Math.PI / 2, top: Math.PI, left: Math.PI / 2 };
+    for (let i = 0; i < this.NUM; i++) {
+      const phase = (this.t + i / this.NUM) % 1;
+      const pt = pointOnBelt(phase);
+      this.arrows[i].position.set(pt.x, pt.y);
+      this.arrows[i].rotation = ROT[pt.edge] ?? 0;
+      // Subtle pulse alpha so chevrons feel like animated HUD elements
+      this.arrows[i].alpha = 0.65 + 0.35 * Math.sin((this.t + i / this.NUM) * Math.PI * 2);
+    }
+  }
+}
+
+// ============= GAME =============
+class Game {
+  constructor(app) {
+    this.app = app;
+    this.scene = null;
+    this.activePigs = [];   // pigs currently lapping/inSlot/transitioning
+    this.won = false;
+    this.lost = false;
+    this.slotWarnT = 0;     // ms remaining on slot warning flash
+    this.audio = new AudioEngine();
+  }
+  countOnBelt() {
+    let n = 0;
+    for (const p of this.activePigs) {
+      if (p.state === 'lapping' || p.state === 'toBelt') n++;
+    }
+    return n;
+  }
+  async init() {
+    this.scene = new PIXI.Container();
+    this.app.stage.addChild(this.scene);
+
+    const bg = new PIXI.Graphics();
+    bg.rect(0, 0, DESIGN_W, DESIGN_H).fill(COLORS.bg);
+    drawSpaceBg(bg);
+    this.scene.addChild(bg);
+
+    const header = new PIXI.Container(); drawHeader(header, this.audio); this.scene.addChild(header); this._header = header;
+
+    const frameG = new PIXI.Graphics(); drawFrame(frameG); this.scene.addChild(frameG);
+
+    this.pattern = generateMoonPattern(GRID_N);
+    adjustPatternToMultiplesOf5(this.pattern);
+    this.colorCounts = countColors(this.pattern);
+    this.grid = new PixelGrid(this.pattern);
+    const used = this.grid.cellSize * this.grid.N;
+    this.grid.container.x = FRAME.x + (FRAME.w - used) / 2;
+    this.grid.container.y = FRAME.y + (FRAME.h - used) / 2;
+
+    initBeltGeometry(this.grid);
+
+    // Belt visual is drawn AFTER belt geom is known, BEFORE grid (under)
+    const beltG = new PIXI.Graphics();
+    drawBelt(beltG, BELT_GEOM);
+    this.scene.addChild(beltG);
+
+    // Marching arrows on top of belt (under grid)
+    this.arrows = new BeltArrows();
+    this.scene.addChild(this.arrows.container);
+
+    this.scene.addChild(this.grid.container);
+
+    this.slotBarG = new PIXI.Container(); drawSlotBar(this.slotBarG); this.scene.addChild(this.slotBarG);
+    // Red glow used for slot-full warning. Fill is at full alpha; we scale via container.alpha.
+    // Drawn as an inset/border ring around the slot row, similar to the reference.
+    this.slotWarnG = new PIXI.Graphics();
+    const swPad = 14;
+    const swX = SLOT_X0 - swPad, swY = SLOT_ROW_Y - SLOT_W/2 - swPad;
+    const swW = SLOT_TOTAL_W + swPad * 2, swH = SLOT_W + swPad * 2;
+    // Outer glow ring (thick stroke) + a softer fill underneath
+    this.slotWarnG.roundRect(swX, swY, swW, swH, 24).fill({ color: 0xff3030, alpha: 0.18 });
+    this.slotWarnG.roundRect(swX, swY, swW, swH, 24).stroke({ color: 0xff5050, width: 6, alignment: 0.5 });
+    this.slotWarnG.alpha = 0;
+    this.scene.addChild(this.slotWarnG);
+    this.fxLayer = new PIXI.Container(); this.scene.addChild(this.fxLayer);
+
+    const pigData = buildPigs(this.colorCounts);
+    this.pigs = pigData.map(d => new Pig(d.color, d.ammo));
+
+    // Sanity check: total pig ammo per color must equal pixel count per color.
+    {
+      const totals = {};
+      for (const p of this.pigs) totals[p.color] = (totals[p.color] || 0) + p.ammo;
+      for (const [c, expected] of Object.entries(this.colorCounts)) {
+        if ((totals[c] || 0) !== expected) {
+          console.warn(`Ammo mismatch for ${c}: pigs=${totals[c] || 0} vs cells=${expected}`);
+        }
+      }
+    }
+
+    const benchCols = buildBenchLayout(this.pigs);
+    this.bench = new Bench(benchCols);
+    this.bench.onPick = (pig) => this.deployFromBench(pig);
+    this.scene.addChild(this.bench.container);
+
+    this.slots = new Slots();
+    this.slots.onRelease = (pig) => this.releaseFromSlot(pig);
+    this.scene.addChild(this.slots.container);
+
+    this.activeLayer = new PIXI.Container();
+    this.scene.addChild(this.activeLayer);
+
+    this.hint = this._makeHint();
+    this.scene.addChild(this.hint);
+
+    this.winOverlay = this._makeWinOverlay();
+    this.winOverlay.visible = false;
+    this.scene.addChild(this.winOverlay);
+
+    this.loseOverlay = this._makeLoseOverlay();
+    this.loseOverlay.visible = false;
+    this.scene.addChild(this.loseOverlay);
+
+    this.updateHint();
+    this.app.ticker.add((ticker) => this.update(ticker.deltaMS));
+  }
+
+  _makeHint() {
+    // Sci-fi tap hint — a glowing targeting reticle (crosshair + ring)
+    const h = new PIXI.Graphics();
+    h.circle(0, 0, 22).stroke({ color: 0x6cd5e8, width: 3, alpha: 0.95 });
+    h.circle(0, 0, 14).stroke({ color: 0xffffff, width: 2, alpha: 0.95 });
+    h.moveTo(-26, 0).lineTo(-10, 0).stroke({ color: 0x6cd5e8, width: 3 });
+    h.moveTo( 10, 0).lineTo( 26, 0).stroke({ color: 0x6cd5e8, width: 3 });
+    h.moveTo(0, -26).lineTo(0, -10).stroke({ color: 0x6cd5e8, width: 3 });
+    h.moveTo(0,  10).lineTo(0,  26).stroke({ color: 0x6cd5e8, width: 3 });
+    h.circle(0, 0, 3).fill(0xffffff);
+    h.alpha = 0.95; h.visible = false;
+    return h;
+  }
+  updateHint() {
+    let target = null;
+    // Prefer slot pig (teach release)
+    for (const p of this.activePigs) if (p.state === 'inSlot') { target = p; break; }
+    if (!target) {
+      for (const p of this.bench.pigs) if (p.benchRow === 0 && p.state === 'bench') { target = p; break; }
+    }
+    if (!target) { this.hint.visible = false; return; }
+    this.hint.visible = true;
+    this.hint.position.set(target.container.x + 28, target.container.y + 50);
+  }
+
+  deployFromBench(pig) {
+    if (this.lost || this.won) return;
+    if (this.countOnBelt() >= BELT_CAP) return; // belt full — block silently
+    this.audio.bootstrap();   // first user interaction → starts audio + music
+    this.audio.playDeploy();
+    this.bench.removePig(pig);
+    pig.state = 'toBelt';
+    pig.beltT = 0;
+    pig.resetFiring();
+    this.activeLayer.addChild(pig.container);
+    this.activePigs.push(pig);
+    this._anticipateThenJumpTo(pig, pointOnBelt(0), 380, () => {
+      pig.state = 'lapping';
+      pig.beltT = 0;
+      pig.resetFiring();
+      pig.setEdge(pointOnBelt(0).edge);
+      this._landSquash(pig);
+      this.audio.playLand();
+    });
+    this.updateHint();
+  }
+
+  releaseFromSlot(pig) {
+    if (pig.state !== 'inSlot' || this.lost || this.won) return;
+    if (this.countOnBelt() >= BELT_CAP) return;
+    this.audio.playDeploy();
+    this.slots.vacate(pig);
+    pig.state = 'toBelt';
+    pig.resetFiring();
+    this._anticipateThenJumpTo(pig, pointOnBelt(0), 360, () => {
+      pig.state = 'lapping';
+      pig.beltT = 0;
+      pig.resetFiring();
+      pig.setEdge(pointOnBelt(0).edge);
+      this._landSquash(pig);
+      this.audio.playLand();
+    });
+    this.updateHint();
+  }
+
+  // Squash-anticipation → springy stretch → arc-style move to target → onComplete
+  _anticipateThenJumpTo(pig, target, moveMS, onComplete) {
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.25, 0.65); // anticipation squash
+    setTimeout(() => {
+      if (pig.state === 'dead' || pig.state === 'vanishing') return;
+      // Stretch upward (the "jump")
+      pig.body.scale.set(0.85, 1.2);
+      tween.add(pig.body.scale, { x: 1, y: 1 }, moveMS, easeOut);
+      // Move with a slight arc by tweening Y separately to mid-bounce then to target
+      tween.killOf(pig.container.position, ['x', 'y']);
+      const startX = pig.container.position.x, startY = pig.container.position.y;
+      const peakY = Math.min(startY, target.y) - 50;
+      const t0 = { v: 0 };
+      tween.add(t0, { v: 1 }, moveMS, easeOut, onComplete);
+      // Manual arc — sample t each frame via tween proxy (we update x/y from t0.v ourselves)
+      const tickFn = () => {
+        const t = clamp(t0.v, 0, 1);
+        pig.container.position.x = lerp(startX, target.x, t);
+        // Parabolic arc on Y
+        const yLine = lerp(startY, target.y, t);
+        const arc = Math.sin(t * Math.PI) * (peakY - Math.min(startY, target.y));
+        pig.container.position.y = yLine + arc;
+        if (t >= 1) this.app.ticker.remove(tickFn);
+      };
+      this.app.ticker.add(tickFn);
+    }, 90);
+  }
+
+  // Squash on impact — used when pig lands at belt entry or in a slot
+  _landSquash(pig) {
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.3, 0.65);
+    tween.add(pig.body.scale, { x: 1, y: 1 }, 280, easeOutBack);
+  }
+
+  _flashSlots() { this.slotWarnT = WARN_FLASH_MS; }
+
+  update(deltaMS) {
+    tween.update(deltaMS);
+    if (this._header._ctaTick) this._header._ctaTick();
+
+    // Slot warning: ONLY pulses red when the danger state is true —
+    //   slots are full AND there's a pig on the belt that will eventually
+    //   arrive (= guaranteed lose). Slots-full alone is fine if the belt
+    //   is empty (player can release at leisure).
+    const dangerState = this.slots.isFull() && this.countOnBelt() > 0;
+    let warnAlpha = 0;
+    if (dangerState) {
+      const t = performance.now() / 200;
+      warnAlpha = 0.32 + 0.28 * (Math.sin(t) * 0.5 + 0.5);
+    }
+    if (this.slotWarnT > 0) {
+      this.slotWarnT = Math.max(0, this.slotWarnT - deltaMS);
+      const phase = this.slotWarnT / WARN_FLASH_MS;
+      const burst = phase * (0.5 + 0.3 * Math.abs(Math.sin(phase * 12)));
+      warnAlpha = Math.max(warnAlpha, burst);
+    }
+    this.slotWarnG.alpha = warnAlpha;
+
+    // Marching arrows on belt
+    if (this.arrows) this.arrows.update(deltaMS);
+
+    if (this.lost || this.won) return;
+
+    for (let i = this.activePigs.length - 1; i >= 0; i--) {
+      const pig = this.activePigs[i];
+      if (pig.state !== 'lapping') continue;
+
+      pig.beltT += deltaMS / LAP_MS;
+      if (pig.beltT >= 1) {
+        // Lap complete — must land in a slot
+        const idx = this.slots.firstFree();
+        if (idx >= 0) {
+          this.slots.occupy(pig, idx);
+          pig.state = 'toSlot';
+          const target = this.slots.pos(idx);
+          tween.killOf(pig.container.position, ['x', 'y']);
+          tween.add(pig.container.position, { x: target.x, y: target.y }, SLOT_TRANSIT_MS, easeOut, () => {
+            pig.state = 'inSlot';
+            pig.setView('back', false); // BACK view in slot — same as bench
+            this._landSquash(pig);       // squash on slot impact
+            this.audio.playLand();
+            this.updateHint();
+          });
+        } else {
+          // No free slot — GAME OVER
+          this.gameOver(pig);
+          return;
+        }
+        continue;
+      }
+
+      const p = pointOnBelt(pig.beltT);
+      pig.container.position.set(p.x, p.y);
+      pig.setEdge(p.edge);
+
+      // Cell-transition firing: when pig enters a NEW (col/row, edge) position,
+      // fire one shot if LoS valid. No cooldown — limited only by ammo and travel speed.
+      if (pig.ammo > 0) {
+        const idx = gridIndexFromBelt(p.edge, p.x, p.y);
+        if (idx !== pig.lastFireIdx || p.edge !== pig.lastFireEdge) {
+          pig.lastFireIdx = idx;
+          pig.lastFireEdge = p.edge;
+          const target = losTarget(this.grid, p.edge, idx, pig.color);
+          if (target) this.fireShot(pig, target);
+        }
+      }
+    }
+
+    // Win check
+    if (!this.won && this.grid.remainingCount() === 0) {
+      this.won = true;
+      this.celebrate();
+    }
+  }
+
+  gameOver(arrivingPig) {
+    if (this.lost) return;
+    this.lost = true;
+    this.audio.playLose();
+    this._flashSlots();
+    // Snap arriving pig to a stack near the slots area
+    if (arrivingPig) {
+      const pos = this.slots.pos(NUM_SLOTS - 1);
+      tween.killOf(arrivingPig.container.position, ['x', 'y']);
+      tween.add(arrivingPig.container.position, { x: pos.x + 30, y: pos.y - 30 }, 200, easeOut);
+      arrivingPig.state = 'dead';
+    }
+    setTimeout(() => {
+      this.loseOverlay.visible = true;
+      this.loseOverlay.alpha = 0;
+      tween.add(this.loseOverlay, { alpha: 1 }, 400, easeOut);
+    }, 350);
+  }
+
+  _makeLoseOverlay() {
+    const c = new PIXI.Container();
+    const dim = new PIXI.Graphics();
+    dim.rect(0, 0, DESIGN_W, DESIGN_H).fill({ color: 0x000000, alpha: 0.6 });
+    c.addChild(dim);
+    const t = new PIXI.Text({
+      text: 'MISSION FAILED',
+      style: { fontSize: 80, fontWeight: 900, fill: 0xff5b3a, stroke: { color: 0x05081a, width: 12 } }
+    });
+    t.anchor.set(0.5); t.position.set(DESIGN_W / 2, 460); c.addChild(t);
+    const sub = new PIXI.Text({
+      text: 'Hangar bays overloaded!',
+      style: { fontSize: 36, fontWeight: 700, fill: 0xffffff }
+    });
+    sub.anchor.set(0.5); sub.position.set(DESIGN_W / 2, 560); c.addChild(sub);
+    const btn = new PIXI.Graphics();
+    btn.roundRect(-180, -50, 360, 100, 28).fill(0xffc940);
+    btn.roundRect(-176, -46, 352, 92, 24).stroke({ color: 0xc8951a, width: 4 });
+    const btnT = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 44, fontWeight: 900, fill: 0x1f2233 } });
+    btnT.anchor.set(0.5); btn.addChild(btnT);
+    btn.position.set(DESIGN_W / 2, 720);
+    btn.eventMode = 'static'; btn.cursor = 'pointer';
+    btn.on('pointertap', () => {
+      if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+      else window.open('https://example.com', '_blank');
+    });
+    c.addChild(btn);
+    return c;
+  }
+
+  fireShot(pig, cell) {
+    // 1) Reserve target cell so other pigs don't aim at the same one
+    this.grid.reserveAndKill(cell);
+    // 2) Decrement ammo IMMEDIATELY so cell-transition firing gate cannot allow
+    //    extra shots while bullets are still in flight (fixes "1-ammo fires 2 shots")
+    pig.setAmmo(pig.ammo - 1);
+    pig.popLabel();
+    pig.pendingBullets++;
+    this.audio.playShoot();
+
+    // 3) Stretch & squash recoil — wide flat squash, then springy snap back
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.28, 0.74);
+    tween.add(pig.body.scale, { x: 1, y: 1 }, 240, easeOutBack);
+
+    // 4) Spawn laser shot from current ship position toward target world position.
+    //    A laser is an elongated beam (rectangle) with a bright white core and a
+    //    colored glow halo, oriented along the travel direction.
+    const from = { x: pig.container.x, y: pig.container.y };
+    const to = this.grid.worldPosOfCell(cell);
+    const ang = Math.atan2(to.y - from.y, to.x - from.x);
+    const c = COLORS[pig.color];
+    const laser = new PIXI.Graphics();
+    // Outer glow halo
+    laser.roundRect(-26, -7, 52, 14, 7).fill({ color: c, alpha: 0.35 });
+    // Mid colored beam
+    laser.roundRect(-22, -4, 44, 8, 4).fill(c);
+    // Bright core
+    laser.roundRect(-22, -2, 44, 4, 2).fill(lighten(c, 1.6));
+    // Sharp leading head
+    laser.circle(22, 0, 3).fill(0xffffff);
+    laser.position.set(from.x, from.y);
+    laser.rotation = ang;
+    this.fxLayer.addChild(laser);
+
+    // Muzzle flash at the firing point — a quick burst sprite
+    const muzzle = new PIXI.Graphics();
+    muzzle.circle(0, 0, 12).fill({ color: c, alpha: 0.55 });
+    muzzle.circle(0, 0, 6).fill({ color: 0xffffff, alpha: 0.95 });
+    muzzle.position.set(from.x, from.y);
+    this.fxLayer.addChild(muzzle);
+    tween.add(muzzle.scale, { x: 2, y: 2 }, 140, easeOut);
+    tween.add(muzzle, { alpha: 0 }, 140, easeOut, () => muzzle.destroy());
+
+    tween.add(laser.position, { x: to.x, y: to.y }, BULLET_MS, easeOut, () => {
+      cell.destroyCell(this.fxLayer, to);
+      this.audio.playDestroy();
+      laser.destroy();
+      pig.pendingBullets = Math.max(0, pig.pendingBullets - 1);
+      // Subtle screen shake on impact
+      this.scene.x = (Math.random() - 0.5) * 3;
+      this.scene.y = (Math.random() - 0.5) * 3;
+      tween.add(this.scene, { x: 0, y: 0 }, 100, easeOut);
+      // Ship explodes only when ammo zero AND no more lasers in flight
+      if (pig.ammo <= 0 && pig.pendingBullets <= 0 && pig.state !== 'vanishing' && pig.state !== 'dead') {
+        this.vanish(pig);
+      }
+    });
+  }
+
+  vanish(pig) {
+    if (pig.state === 'vanishing' || pig.state === 'dead') return;
+    pig.state = 'vanishing';
+    pig.container.eventMode = 'none';
+    this.audio.playVanish();
+    if (pig.slotIdx >= 0) this.slots.vacate(pig);
+    const cx = pig.container.x, cy = pig.container.y;
+    for (let i = 0; i < 8; i++) {
+      const s = new PIXI.Graphics();
+      s.star(0, 0, 4, 8, 4).fill(0xfff8a0);
+      s.position.set(cx, cy);
+      this.fxLayer.addChild(s);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 80 + Math.random() * 50;
+      tween.add(s.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 600, easeOut);
+      tween.add(s, { alpha: 0, rotation: Math.PI * 2 }, 600, easeOut, () => s.destroy());
+      tween.add(s.scale, { x: 0.2, y: 0.2 }, 600, easeOut);
+    }
+    tween.add(pig.container.scale, { x: 0, y: 0 }, VANISH_MS, easeOut);
+    tween.add(pig.container, { rotation: Math.PI * 3, alpha: 0 }, VANISH_MS, easeOut, () => {
+      pig.state = 'dead';
+      const i = this.activePigs.indexOf(pig);
+      if (i >= 0) this.activePigs.splice(i, 1);
+      pig.container.destroy();
+      this.updateHint();
+    });
+  }
+
+  _makeWinOverlay() {
+    const c = new PIXI.Container();
+    const dim = new PIXI.Graphics();
+    dim.rect(0, 0, DESIGN_W, DESIGN_H).fill({ color: 0x000000, alpha: 0.55 });
+    c.addChild(dim);
+    const t = new PIXI.Text({ text: 'SECTOR CLEARED!', style: { fontSize: 72, fontWeight: 900, fill: 0xffd24a, stroke: { color: 0x05081a, width: 12 } } });
+    t.anchor.set(0.5); t.position.set(DESIGN_W / 2, 480); c.addChild(t);
+    const btn = new PIXI.Graphics();
+    btn.roundRect(-180, -50, 360, 100, 28).fill(0xffc940);
+    btn.roundRect(-176, -46, 352, 92, 24).stroke({ color: 0xc8951a, width: 4 });
+    const btnT = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 44, fontWeight: 900, fill: 0x1f2233 } });
+    btnT.anchor.set(0.5); btn.addChild(btnT);
+    btn.position.set(DESIGN_W / 2, 700);
+    btn.eventMode = 'static'; btn.cursor = 'pointer';
+    btn.on('pointertap', () => {
+      if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+      else window.open('https://example.com', '_blank');
+    });
+    c.addChild(btn);
+    return c;
+  }
+  celebrate() {
+    this.audio.playWin();
+    for (let i = 0; i < 40; i++) {
+      const conf = new PIXI.Graphics();
+      const colors = [0xff5b3a, 0xffd24a, 0x4ec3d8, 0xb070dd, 0xfafafa];
+      conf.rect(-6, -10, 12, 20).fill(colors[i % colors.length]);
+      conf.position.set(DESIGN_W / 2 + (Math.random() - 0.5) * 200, 200);
+      conf.rotation = Math.random() * Math.PI * 2;
+      this.fxLayer.addChild(conf);
+      tween.add(conf.position, { x: Math.random() * DESIGN_W, y: DESIGN_H + 50 }, 1800 + Math.random() * 1000, easeOut);
+      tween.add(conf, { rotation: conf.rotation + Math.random() * 6 - 3 }, 1800, easeOut, () => conf.destroy());
+    }
+    setTimeout(() => {
+      this.winOverlay.visible = true; this.winOverlay.alpha = 0;
+      tween.add(this.winOverlay, { alpha: 1 }, 400, easeOut);
+    }, 800);
+  }
+}
+
+// ============= BOOT =============
+async function main() {
+  const app = new PIXI.Application();
+  await app.init({
+    width: DESIGN_W, height: DESIGN_H,
+    backgroundColor: COLORS.bg, antialias: true, autoDensity: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+  });
+  document.getElementById('stage').appendChild(app.canvas);
+
+  const fit = () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    const scale = Math.min(W / DESIGN_W, H / DESIGN_H);
+    app.canvas.style.width = (DESIGN_W * scale) + 'px';
+    app.canvas.style.height = (DESIGN_H * scale) + 'px';
+  };
+  fit(); window.addEventListener('resize', fit); window.addEventListener('orientationchange', fit);
+
+  const game = new Game(app);
+  await game.init();
+  window.__GAME__ = game;
+  window.__APP__ = app;
+
+  if (typeof mraid === 'undefined') window.mraid = { open: (url) => window.open(url, '_blank') };
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main);
+else main();
+</script>
+</body>
+</html>

@@ -1,0 +1,1674 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Pixel Blast — Prototype</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #4a4a5e; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.js"></script>
+<script>
+"use strict";
+
+/* ============================================================
+   PIXEL BLAST — Prototype (auto-shoot from belt, LoS-based)
+
+   - Pigs travel slowly around a closed belt loop hugging the
+     grid's 4 edges. While on belt, each pig auto-fires a shot
+     at its own color when:
+       * the cell directly INWARD from its current position
+         (in the row/col it's on) is alive AND its color, AND
+       * no other-colored pixel sits between pig and target.
+   - When pig finishes a lap, it lands in the next free slot
+     (5 slots below the frame). Tap the slot pig to put it
+     back on the belt for another lap.
+   - Pig with ammo == 0 vanishes (spin + sparkles) wherever
+     it is. Win when grid is empty.
+   ============================================================ */
+
+// ============= CONSTANTS =============
+const DESIGN_W = 750;
+const DESIGN_H = 1334;
+
+const COLORS = {
+  bg:       0x4a4a5e,
+  bgDark:   0x3a3a4e,
+  P:        0x9b4dca,
+  B:        0x1f2233,
+  W:        0xf5f5f5,
+  C:        0x4ec3d8,
+  Y:        0xffd24a,
+  frame:    0x6464a0,
+  frameHi:  0x8585b8,
+  frameLo:  0x4e4e80,
+  belt:     0x4a4a70,
+  beltHi:   0x6868a0,
+  pigEye:   0x1a1d2e,
+  benchSlot: 0x3c3c4e,
+  benchSlotBorder: 0x5a5a72,
+};
+
+const PIG_TINTS = {
+  P: 0xb070dd,
+  B: 0x36394e,
+  W: 0xfafafa,
+  C: 0x6cd5e8,
+  Y: 0xffd95c,
+};
+
+const GRID_N = 25;            // 25×25 = 625 cells (multiple of 5 → clean ammo math)
+const NUM_PIGS = 36;
+const AMMO_STEP = 5;          // pig ammo values are multiples of this
+const AMMO_MAX = 40;
+const NUM_SLOTS = 5;
+const BENCH_COLS = 4;
+const BENCH_ROWS = 9;
+const BENCH_VISIBLE_ROWS = 3;
+
+const LAP_MS = 6500;            // 1 full lap = 6.5s
+const ARROW_LOOP_MS = LAP_MS * 2; // arrows visually march at HALF the belt speed
+const EDGE_TURN_MS = 220;       // smooth body rotation on corners
+const BELT_CAP = 5;             // max pigs simultaneously on belt (excluding slots)
+const WARN_FLASH_MS = 700;      // duration of red warning flash
+const BULLET_MS = 180;
+const SLOT_TRANSIT_MS = 480;
+const VANISH_MS = 540;
+const BENCH_REFLOW_MS = 280;
+const SLOT_REFLOW_MS = 240;
+
+// Layout
+const FRAME = { x: 50, y: 175, w: 650, h: 650 };
+const SLOT_ROW_Y = 920;
+const SLOT_W = 110;
+const SLOT_GAP = 14;
+const SLOT_TOTAL_W = NUM_SLOTS * SLOT_W + (NUM_SLOTS - 1) * SLOT_GAP;
+const SLOT_X0 = (DESIGN_W - SLOT_TOTAL_W) / 2;
+const BENCH = { x: 90, y: 1050, colW: 145, rowH: 95 };
+
+// Belt offset from grid (px)
+const BELT_OFFSET = 30;
+
+// ============= UTILS =============
+const lerp = (a, b, t) => a + (b - a) * t;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeInOut = t => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+const easeOutBack = t => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ============= TWEEN =============
+class Tweener {
+  constructor() { this.active = []; }
+  add(target, props, duration, ease = easeOut, onComplete) {
+    const start = {};
+    for (const k of Object.keys(props)) start[k] = target[k];
+    const tw = { target, start, end: { ...props }, duration, ease, onComplete, t: 0, done: false };
+    this.active.push(tw);
+    return tw;
+  }
+  // Kill any active tweens whose target matches AND whose props overlap.
+  // If `props` omitted, kills all tweens on target.
+  killOf(target, propKeys) {
+    for (const tw of this.active) {
+      if (tw.target !== target) continue;
+      if (!propKeys) { tw.done = true; continue; }
+      for (const k of propKeys) if (k in tw.end) { tw.done = true; break; }
+    }
+  }
+  update(deltaMS) {
+    for (const tw of this.active) {
+      if (tw.done) continue;
+      tw.t += deltaMS / tw.duration;
+      const t = clamp(tw.t, 0, 1);
+      const e = tw.ease(t);
+      for (const k of Object.keys(tw.end)) tw.target[k] = lerp(tw.start[k], tw.end[k], e);
+      if (tw.t >= 1) { tw.done = true; if (tw.onComplete) tw.onComplete(); }
+    }
+    this.active = this.active.filter(tw => !tw.done);
+  }
+}
+const tween = new Tweener();
+
+// ============= PATTERN GEN =============
+function generateMoonPattern(N) {
+  const grid = Array.from({ length: N }, () => Array(N).fill('P'));
+  // Larger moon so its outer rim (cyan/white) reaches near grid edges,
+  // giving every color reachable cells from at least one belt edge.
+  const cx = N * 0.5, cy = N * 0.5, moonR = N * 0.46;
+  const cutCx = N * 0.66, cutCy = N * 0.42, cutR = N * 0.38;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dxM = x + 0.5 - cx, dyM = y + 0.5 - cy;
+      const distM = Math.sqrt(dxM*dxM + dyM*dyM);
+      const dxC = x + 0.5 - cutCx, dyC = y + 0.5 - cutCy;
+      const distC = Math.sqrt(dxC*dxC + dyC*dyC);
+      if (distM <= moonR && distC > cutR) {
+        if (distM > moonR - 1.4) grid[y][x] = 'C';
+        else grid[y][x] = 'W';
+      } else if (distM <= moonR + 1.5 && distC <= cutR) {
+        grid[y][x] = 'B';
+      }
+    }
+  }
+  const stars = [
+    [3, 3, 1], [N-3, 3, 2], [3, N-4, 2], [N-2, N-3, 1],
+    [6, 6, 1], [N-6, 9, 1], [4, N-7, 1], [N-4, N-9, 1],
+    [13, 4, 1], [16, 5, 2], [11, 6, 1], [9, 19, 1], [18, 20, 2],
+  ];
+  for (const [sx, sy, sz] of stars) drawStar(grid, sx, sy, sz);
+  return grid;
+}
+function drawStar(grid, x, y, size) {
+  const N = grid.length;
+  const set = (xx, yy) => { if (xx >= 0 && xx < N && yy >= 0 && yy < N && grid[yy][xx] === 'P') grid[yy][xx] = 'Y'; };
+  set(x, y);
+  if (size >= 1) { set(x-1, y); set(x+1, y); set(x, y-1); set(x, y+1); }
+  if (size >= 2) { set(x-2, y); set(x+2, y); set(x, y-2); set(x, y+2); }
+}
+function countColors(grid) {
+  const c = {};
+  for (const row of grid) for (const ch of row) c[ch] = (c[ch] || 0) + 1;
+  return c;
+}
+
+// Tweak the pattern so every color's pixel count is a multiple of AMMO_STEP (5).
+// This lets us hand out only multiples-of-5 ammo to pigs while keeping the
+// invariant Σ ammo[color] === pixel count[color]. Total cells must already be
+// a multiple of AMMO_STEP (true for 25×25 = 625).
+function adjustPatternToMultiplesOf5(grid) {
+  const N = grid.length;
+  // Adjust each non-P color first by swapping with P cells. P absorbs the
+  // residual and naturally lands on a multiple of 5 because the total is.
+  for (const color of ['B', 'C', 'W', 'Y']) {
+    const counts = countColors(grid);
+    const r = (counts[color] || 0) % AMMO_STEP;
+    if (r === 0) continue;
+    if (r <= 2) {
+      // Drop r cells of this color → P
+      let need = r;
+      for (let y = 0; y < N && need > 0; y++) for (let x = 0; x < N && need > 0; x++) {
+        if (grid[y][x] === color) { grid[y][x] = 'P'; need--; }
+      }
+    } else {
+      // Add (5 - r) cells of this color, taken from P
+      let need = AMMO_STEP - r;
+      for (let y = 0; y < N && need > 0; y++) for (let x = 0; x < N && need > 0; x++) {
+        if (grid[y][x] === 'P') { grid[y][x] = color; need--; }
+      }
+    }
+  }
+}
+
+// ============= PIG GENERATION =============
+// Partition `total` (must be a multiple of `step`) into `count` chunks where
+// each chunk is a multiple of `step` and lies within [step, maxValue].
+function partitionIntoMultiples(total, count, step, maxValue) {
+  const totalUnits = Math.round(total / step);
+  // Even base + distribute the leftover step-units one-per-pig
+  const baseUnits = Math.floor(totalUnits / count);
+  const extraUnits = totalUnits - baseUnits * count;
+  const chunks = [];
+  for (let i = 0; i < count; i++) {
+    chunks.push((baseUnits + (i < extraUnits ? 1 : 0)) * step);
+  }
+  // Add some natural variance: shuttle one step-unit between random chunks
+  const passes = Math.min(count * 2, Math.floor(totalUnits / 2));
+  for (let v = 0; v < passes; v++) {
+    const i = Math.floor(Math.random() * count);
+    const j = Math.floor(Math.random() * count);
+    if (i !== j && chunks[i] > step && chunks[j] < maxValue) {
+      chunks[i] -= step;
+      chunks[j] += step;
+    }
+  }
+  return chunks;
+}
+
+function buildPigs(colorCounts) {
+  const total = Object.values(colorCounts).reduce((a, b) => a + b, 0);
+  const entries = Object.entries(colorCounts).filter(([c, n]) => n > 0);
+
+  // Allocate pig SLOTS per color proportionally
+  const allocation = {};
+  for (const [c, n] of entries) allocation[c] = Math.max(1, Math.round(n / total * NUM_PIGS));
+
+  // Constrain allocation so each color can be evenly split into multiples of 5
+  // within [AMMO_STEP, AMMO_MAX]. min pigs = count/MAX, max pigs = count/STEP.
+  for (const [c, n] of entries) {
+    const minPigs = Math.ceil(n / AMMO_MAX);
+    const maxPigs = Math.floor(n / AMMO_STEP);
+    if (allocation[c] < minPigs) allocation[c] = minPigs;
+    if (allocation[c] > maxPigs) allocation[c] = maxPigs;
+  }
+
+  // Adjust to hit NUM_PIGS, transferring slots between colors that have room
+  let allocated = Object.values(allocation).reduce((a, b) => a + b, 0);
+  while (allocated > NUM_PIGS) {
+    let target = null;
+    for (const [c, n] of entries) {
+      const minPigs = Math.ceil(n / AMMO_MAX);
+      if (allocation[c] > minPigs && (!target || allocation[c] > allocation[target])) target = c;
+    }
+    if (!target) break;
+    allocation[target]--;
+    allocated--;
+  }
+  while (allocated < NUM_PIGS) {
+    let target = null;
+    for (const [c, n] of entries) {
+      const maxPigs = Math.floor(n / AMMO_STEP);
+      if (allocation[c] < maxPigs) {
+        const ratio = colorCounts[c] / allocation[c];
+        if (!target || ratio > colorCounts[target] / allocation[target]) target = c;
+      }
+    }
+    if (!target) break;
+    allocation[target]++;
+    allocated++;
+  }
+
+  // Partition each color's count into ammo chunks (all multiples of 5)
+  const pigs = [];
+  for (const [color, num] of Object.entries(allocation)) {
+    if (num === 0) continue;
+    const chunks = partitionIntoMultiples(colorCounts[color], num, AMMO_STEP, AMMO_MAX);
+    for (const ammo of chunks) pigs.push({ color, ammo });
+  }
+
+  // Shuffle (Fisher-Yates)
+  for (let i = pigs.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pigs[i], pigs[j]] = [pigs[j], pigs[i]];
+  }
+  return pigs;
+}
+
+// ============= BELT (closed loop hugging grid edges, counterclockwise) =============
+let BELT_GEOM = null; // populated after grid is created
+function initBeltGeometry(grid) {
+  const gx = grid.container.x;
+  const gy = grid.container.y;
+  const gw = grid.cellSize * grid.N;
+  const off = BELT_OFFSET;
+  // Counterclockwise from bottom-LEFT entry (where the valve / drop-out sits):
+  // bottom (L→R), right (B→T), top (R→L), left (T→B)
+  const segs = [
+    { edge: 'bottom', a: { x: gx,           y: gy + gw + off }, b: { x: gx + gw,      y: gy + gw + off } },
+    { edge: 'right',  a: { x: gx + gw + off, y: gy + gw },      b: { x: gx + gw + off, y: gy }            },
+    { edge: 'top',    a: { x: gx + gw,      y: gy - off },      b: { x: gx,           y: gy - off }       },
+    { edge: 'left',   a: { x: gx - off,     y: gy },            b: { x: gx - off,     y: gy + gw }        },
+  ];
+  const lens = segs.map(s => Math.hypot(s.b.x - s.a.x, s.b.y - s.a.y));
+  const total = lens.reduce((a,b) => a+b, 0);
+  BELT_GEOM = { segs, lens, total, gx, gy, gw, cell: grid.cellSize, N: grid.N };
+}
+function pointOnBelt(t) {
+  t = t - Math.floor(t); // wrap to [0,1)
+  const target = t * BELT_GEOM.total;
+  let acc = 0;
+  for (let i = 0; i < BELT_GEOM.segs.length; i++) {
+    const seg = BELT_GEOM.segs[i];
+    const len = BELT_GEOM.lens[i];
+    if (acc + len >= target) {
+      const local = (target - acc) / len;
+      return {
+        edge: seg.edge,
+        x: lerp(seg.a.x, seg.b.x, local),
+        y: lerp(seg.a.y, seg.b.y, local),
+      };
+    }
+    acc += len;
+  }
+  const last = BELT_GEOM.segs[BELT_GEOM.segs.length - 1];
+  return { edge: last.edge, x: last.b.x, y: last.b.y };
+}
+const EDGE_ROT = { top: 0, right: Math.PI / 2, bottom: Math.PI, left: -Math.PI / 2 };
+
+// Map pig screen position on belt → grid row/col index
+function gridIndexFromBelt(edge, x, y) {
+  const { gx, gy, cell, N } = BELT_GEOM;
+  if (edge === 'top' || edge === 'bottom') {
+    const col = Math.floor((x - gx) / cell);
+    return clamp(col, 0, N - 1);
+  } else {
+    const row = Math.floor((y - gy) / cell);
+    return clamp(row, 0, N - 1);
+  }
+}
+
+// LoS check: from belt edge looking inward at column/row idx, find first alive cell.
+// Return that cell only if its color matches; else null (LoS blocked or no target).
+function losTarget(grid, edge, idx, color) {
+  if (edge === 'bottom') {
+    for (let row = grid.N - 1; row >= 0; row--) {
+      const cell = grid.cells[row][idx];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'top') {
+    for (let row = 0; row < grid.N; row++) {
+      const cell = grid.cells[row][idx];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'left') {
+    for (let col = 0; col < grid.N; col++) {
+      const cell = grid.cells[idx][col];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  } else if (edge === 'right') {
+    for (let col = grid.N - 1; col >= 0; col--) {
+      const cell = grid.cells[idx][col];
+      if (cell.alive) return cell.color === color ? cell : null;
+    }
+  }
+  return null;
+}
+
+// ============= COLOR HELPERS =============
+function darken(hex, k) {
+  const r = ((hex >> 16) & 0xff) * k, g = ((hex >> 8) & 0xff) * k, b = (hex & 0xff) * k;
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
+function lighten(hex, k) {
+  const r = clamp(((hex >> 16) & 0xff) * k, 0, 255);
+  const g = clamp(((hex >> 8) & 0xff) * k, 0, 255);
+  const b = clamp((hex & 0xff) * k, 0, 255);
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
+
+// ============= DRAWING =============
+function drawFrame(g) {
+  const x = FRAME.x, y = FRAME.y, w = FRAME.w, h = FRAME.h;
+  g.roundRect(x, y, w, h, 28).fill(COLORS.frame);
+  g.roundRect(x + 16, y + 16, w - 32, h - 32, 22).fill(COLORS.frameLo);
+  g.roundRect(x + 50, y + 50, w - 100, h - 100, 8).stroke({ color: COLORS.frameHi, width: 4, alignment: 0 });
+}
+function drawBelt(g, geom) {
+  // Belt visual — exactly matches the path the pig travels along
+  const { gx, gy, gw } = geom;
+  const off = BELT_OFFSET;
+  const x = gx - off, y = gy - off, w = gw + off * 2, h = gw + off * 2;
+  g.roundRect(x, y, w, h, 26).stroke({ color: COLORS.beltHi, width: 32, alignment: 0 });
+  g.roundRect(x, y, w, h, 26).stroke({ color: COLORS.belt, width: 24, alignment: 0 });
+  // Chevron arrows hinting counterclockwise flow
+  const drawChev = (cx, cy, rot) => {
+    g.moveTo(-7, -5).lineTo(0, 0).lineTo(-7, 5);
+    g.stroke({ color: 0xa0a0c8, width: 3 });
+  };
+}
+function drawSlotBar(container) {
+  for (let i = 0; i < NUM_SLOTS; i++) {
+    const g = new PIXI.Graphics();
+    const x = SLOT_X0 + i * (SLOT_W + SLOT_GAP);
+    g.roundRect(x, SLOT_ROW_Y - SLOT_W/2, SLOT_W, SLOT_W, 16).fill(COLORS.benchSlot);
+    g.roundRect(x + 3, SLOT_ROW_Y - SLOT_W/2 + 3, SLOT_W - 6, SLOT_W - 6, 14).stroke({ color: COLORS.benchSlotBorder, width: 2 });
+    container.addChild(g);
+  }
+}
+function drawHeader(container, audio) {
+  const t = new PIXI.Text({
+    text: 'PIXEL\nBLAST',
+    style: { fontSize: 60, fontWeight: 900, fill: 0x6cd5e8, stroke: { color: 0x1f2233, width: 8 }, lineHeight: 56, letterSpacing: 1 }
+  });
+  t.position.set(34, 36);
+  container.addChild(t);
+
+  // Mute toggle — small speaker icon top-center
+  if (audio) {
+    const mute = new PIXI.Container();
+    const ring = new PIXI.Graphics();
+    ring.circle(0, 0, 26).fill(0x2c2c40).stroke({ color: 0x55557a, width: 3 });
+    mute.addChild(ring);
+    const drawIcon = () => {
+      ring.clear();
+      ring.circle(0, 0, 26).fill(0x2c2c40).stroke({ color: 0x55557a, width: 3 });
+      // Speaker body
+      ring.roundRect(-12, -7, 8, 14, 1.5).fill(0xe0e0f0);
+      ring.moveTo(-4, -7).lineTo(4, -12).lineTo(4, 12).lineTo(-4, 7).fill(0xe0e0f0);
+      if (audio.muted) {
+        // Red slash across the icon
+        ring.moveTo(-15, -15).lineTo(15, 15).stroke({ color: 0xff5b3a, width: 4, cap: 'round' });
+      } else {
+        // Sound waves
+        ring.arc(8, 0, 4, -0.6, 0.6).stroke({ color: 0xe0e0f0, width: 2 });
+        ring.arc(8, 0, 8, -0.6, 0.6).stroke({ color: 0xe0e0f0, width: 2 });
+      }
+    };
+    drawIcon();
+    mute.position.set(DESIGN_W / 2, 60);
+    mute.eventMode = 'static';
+    mute.cursor = 'pointer';
+    mute.on('pointertap', () => {
+      audio.bootstrap();           // ensure ctx exists, then toggle mute
+      audio.setMuted(!audio.muted);
+      drawIcon();
+    });
+    container.addChild(mute);
+  }
+
+  const ctaG = new PIXI.Graphics();
+  ctaG.roundRect(0, 0, 230, 92, 22).fill(0xffc940);
+  ctaG.roundRect(4, 4, 222, 84, 18).stroke({ color: 0xc8951a, width: 4 });
+  const ctaText = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 32, fontWeight: 900, fill: 0x1f2233 } });
+  ctaText.anchor.set(0.5);
+  ctaText.position.set(115, 46);
+  ctaG.addChild(ctaText);
+  ctaG.pivot.set(115, 46);
+  ctaG.position.set(DESIGN_W - 230 - 30 + 115, 50 + 46);
+  ctaG.eventMode = 'static';
+  ctaG.cursor = 'pointer';
+  ctaG.on('pointertap', () => {
+    if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+    else window.open('https://example.com', '_blank');
+  });
+  let pulseT = 0;
+  container._ctaTick = () => { pulseT += 0.05; ctaG.scale.set(1 + Math.sin(pulseT) * 0.04); };
+  container.addChild(ctaG);
+}
+// ========== Pig views (full body, ~60° camera from above-front) ==========
+// LESSON LEARNED: keep the body EGG-shaped and proportionally consistent across
+// all views. The "camera" doesn't move between views — only WHICH PART of the
+// pig faces it. Light source is fixed at top-left (highlight always on
+// upper-left of the body). Eyes use a concentric "donut" style (light → dark →
+// light → tiny black pupil). Snout is a flat round disc with two nostril
+// dots — only protruding in the side view.
+//
+//   BACK  — pig faces UP / away from camera (bench, slots, bottom belt edge):
+//           ears at top, no face, curly tail bump at bottom-center, feet bumps.
+//   FRONT — pig faces DOWN / toward camera (top belt edge): face fills upper
+//           part with donut eyes + round snout disc; feet at bottom.
+//   SIDE  — chubby profile facing LEFT (right belt edge); 1 eye visible,
+//           snout protrudes left, curly tail at back-right, 4 leg hints.
+
+// All three views share the same body footprint (egg, ~64×84) so the pig
+// reads as the same character from any angle.
+function drawPigBack(g, colorKey) {
+  const tint   = PIG_TINTS[colorKey];
+  const dark   = darken(tint, 0.55);
+  const darker = darken(tint, 0.38);
+  const light  = lighten(tint, 1.28);
+  const accent = 0x1a1a22;
+
+  // Front feet (drawn first — partially occluded by body) — peeking under the body
+  g.circle(-18, 34, 9).fill(dark);
+  g.circle( 18, 34, 9).fill(dark);
+  g.circle(-18, 34, 5).fill(darker);
+  g.circle( 18, 34, 5).fill(darker);
+
+  // Body — egg shape, taller than wide (the back of the pig)
+  g.ellipse(0, 0, 32, 42).fill(tint);
+
+  // Top-left highlight (consistent light source from above-front-left)
+  g.ellipse(-9, -16, 13, 17).fill(light);
+
+  // Ears at top (paired bumps, donut-textured to suggest depth)
+  g.circle(-15, -32, 9).fill(dark);
+  g.circle( 15, -32, 9).fill(dark);
+  g.circle(-15, -32, 5).fill(darker);
+  g.circle( 15, -32, 5).fill(darker);
+  g.circle(-17, -34, 1.6).fill(light);
+  g.circle( 13, -34, 1.6).fill(light);
+
+  // Curly tail at bottom-center (the rear of the pig is closest to camera)
+  g.circle(0, 36, 6).fill(dark);
+  g.circle(0, 36, 3).fill(darker);
+  g.circle(-1, 35, 1).fill(light);
+
+  if (colorKey === 'W') g.ellipse(0, 0, 32, 42).stroke({ color: 0xc8c8d8, width: 1.5 });
+}
+
+function drawPigFront(g, colorKey) {
+  const tint   = PIG_TINTS[colorKey];
+  const dark   = darken(tint, 0.55);
+  const darker = darken(tint, 0.38);
+  const light  = lighten(tint, 1.28);
+  const accent = 0x1a1a22;
+
+  // Front feet behind body
+  g.circle(-16, 36, 10).fill(dark);
+  g.circle( 16, 36, 10).fill(dark);
+  g.circle(-16, 36, 6).fill(darker);
+  g.circle( 16, 36, 6).fill(darker);
+
+  // Body — same egg shape as BACK view
+  g.ellipse(0, 0, 32, 42).fill(tint);
+
+  // Top-left highlight (same light source as other views)
+  g.ellipse(-10, -18, 12, 14).fill(light);
+
+  // Ears at top corners
+  g.circle(-19, -32, 9).fill(dark);
+  g.circle( 19, -32, 9).fill(dark);
+  g.circle(-19, -32, 5).fill(darker);
+  g.circle( 19, -32, 5).fill(darker);
+  g.circle(-21, -34, 1.6).fill(light);
+  g.circle( 17, -34, 1.6).fill(light);
+
+  // Eyes — concentric "donut" style: light ring → dark ring → light → black dot
+  // Left
+  g.circle(-12, -10, 9).fill(light);
+  g.circle(-12, -10,  7).fill(dark);
+  g.circle(-12, -10,  4).fill(light);
+  g.circle(-11,  -9,  2).fill(accent);
+  // Right
+  g.circle( 12, -10, 9).fill(light);
+  g.circle( 12, -10,  7).fill(dark);
+  g.circle( 12, -10,  4).fill(light);
+  g.circle( 13,  -9,  2).fill(accent);
+
+  // Snout — flat round disc with two nostrils (no protrusion in front view)
+  g.circle(0, 16, 14).fill(dark);
+  g.circle(0, 16, 11).fill(darker);
+  g.ellipse(-4, 16, 2, 3).fill(accent);
+  g.ellipse( 4, 16, 2, 3).fill(accent);
+
+  if (colorKey === 'W') g.ellipse(0, 0, 32, 42).stroke({ color: 0xc8c8d8, width: 1.5 });
+}
+
+function drawPigSide(g, colorKey) {
+  // Chubby pig in profile, facing LEFT. Mirror via mirrorWrap for right-facing.
+  const tint   = PIG_TINTS[colorKey];
+  const dark   = darken(tint, 0.55);
+  const darker = darken(tint, 0.38);
+  const light  = lighten(tint, 1.28);
+  const accent = 0x1a1a22;
+
+  // Hind legs (drawn first, mostly hidden by body)
+  g.circle(  6, 26, 9).fill(dark);
+  g.circle( 26, 26, 9).fill(dark);
+  g.circle(  6, 26, 5).fill(darker);
+  g.circle( 26, 26, 5).fill(darker);
+
+  // Body — chubby horizontal egg (same total footprint as back/front but rotated)
+  g.ellipse(4, -2, 32, 28).fill(tint);
+
+  // Top-left belly highlight
+  g.ellipse(-2, -12, 14, 7).fill(light);
+
+  // Curly tail at back-right (a small spiral)
+  g.moveTo(34, -10)
+   .bezierCurveTo(44, -16, 46, -8, 38, -2)
+   .bezierCurveTo(34, 2, 40, 6, 32, 4)
+   .stroke({ color: dark, width: 4, cap: 'round', join: 'round' });
+
+  // Front legs (in front of body)
+  g.circle(-12, 26, 9).fill(dark);
+  g.circle( 14, 26, 9).fill(dark);
+  g.circle(-12, 26, 5).fill(darker);
+  g.circle( 14, 26, 5).fill(darker);
+
+  // Head — round, sticking out front-left
+  g.circle(-22, -2, 19).fill(tint);
+
+  // Snout — protrudes LEFT (cylindrical disc with 2 nostrils)
+  g.roundRect(-46, 0, 18, 16, 9).fill(dark);
+  g.roundRect(-44, 2, 14, 12, 6).fill(darker);
+  g.circle(-39,  6, 1.8).fill(accent);
+  g.circle(-39, 12, 1.8).fill(accent);
+
+  // Ear on top of head
+  g.circle(-16, -22, 9).fill(dark);
+  g.circle(-16, -22, 5).fill(darker);
+  g.circle(-18, -24, 1.5).fill(light);
+
+  // Eye (1 visible — same donut style as front view)
+  g.circle(-22, -7, 7).fill(light);
+  g.circle(-22, -7, 5).fill(dark);
+  g.circle(-22, -7, 3).fill(light);
+  g.circle(-21, -6, 1.5).fill(accent);
+
+  if (colorKey === 'W') g.ellipse(4, -2, 32, 28).stroke({ color: 0xc8c8d8, width: 1.5 });
+}
+
+// ============= PIG =============
+class Pig {
+  constructor(color, ammo) {
+    this.color = color;
+    this.ammo = ammo;
+    this.maxAmmo = ammo;
+    this.state = 'bench'; // bench | toBelt | lapping | toSlot | inSlot | vanishing | dead
+    this.beltT = 0;       // 0..1 lap progress (only meaningful when lapping)
+    this.lastFireIdx = -1;   // last col/row where this pig fired (cell-transition gate)
+    this.lastFireEdge = null;
+    this.pendingBullets = 0; // bullets in flight whose cell hasn't been destroyed yet
+    this.benchRow = -1;
+    this.benchCol = -1;
+    this.slotIdx = -1;
+
+    this.container = new PIXI.Container();
+    // mirrorWrap holds the orientation flip (scale.x = ±1) so it doesn't conflict
+    // with `body.scale` which is used for squash & stretch on each shot.
+    this.mirrorWrap = new PIXI.Container();
+    this.body = new PIXI.Graphics();
+    this.mirrorWrap.addChild(this.body);
+    this.container.addChild(this.mirrorWrap);
+    this._lastView = null;
+    this._mirrored = false;
+    this.setView('back'); // bench/slot default = back-of-pig view
+
+    this.label = new PIXI.Text({
+      text: String(ammo),
+      style: { fontSize: 32, fontWeight: 900, fill: 0xffffff, stroke: { color: 0x1f2233, width: 5 }, fontFamily: 'sans-serif' }
+    });
+    this.label.anchor.set(0.5);
+    this.label.position.set(0, -62);
+    this.container.addChild(this.label);
+
+    this.container.eventMode = 'static';
+    this.container.cursor = 'pointer';
+  }
+
+  // view ∈ {'back', 'front', 'side'}; mirrored flips horizontally (used for left-edge side view)
+  setView(view, mirrored = false) {
+    if (this._lastView === view && this._mirrored === mirrored) return;
+    this._lastView = view;
+    this._mirrored = mirrored;
+    this.body.clear();
+    if (view === 'side')       drawPigSide(this.body, this.color);
+    else if (view === 'front') drawPigFront(this.body, this.color);
+    else                       drawPigBack(this.body, this.color);
+    this.mirrorWrap.scale.x = mirrored ? -1 : 1;
+    this.mirrorWrap.scale.y = 1;
+    // Reset squash so the new sprite renders at its natural size
+    tween.killOf(this.body.scale, ['x', 'y']);
+    this.body.scale.set(1, 1);
+  }
+  setAmmo(n) { this.ammo = n; this.label.text = String(n); }
+  popLabel() { this.label.scale.set(1.4); tween.add(this.label.scale, { x: 1, y: 1 }, 200, easeOut); }
+  popBody() { this.body.scale.set(0.85); tween.add(this.body.scale, { x: 1, y: 1 }, 220, easeOutBack); }
+  resetFiring() { this.lastFireIdx = -1; this.lastFireEdge = null; }
+  setEdge(edge) {
+    // 60°-down camera convention: pig always faces INWARD (toward grid).
+    //   bottom edge: pig faces UP (away from camera) → BACK view (no face visible)
+    //   top edge:    pig faces DOWN (toward camera) → FRONT view (face visible)
+    //   right edge:  pig faces LEFT → SIDE view (default snout-left)
+    //   left edge:   pig faces RIGHT → SIDE view, mirrored
+    if (edge === 'bottom')      this.setView('back',  false);
+    else if (edge === 'top')    this.setView('front', false);
+    else if (edge === 'right')  this.setView('side',  false);
+    else if (edge === 'left')   this.setView('side',  true);
+  }
+}
+
+// ============= PIXEL CELL =============
+class PixelCell {
+  constructor(color, x, y, size) {
+    this.color = color;
+    this.alive = color !== null;
+    this.gx = x;
+    this.gy = y;
+    this.size = size;
+    this.sprite = new PIXI.Graphics();
+    if (this.alive) {
+      const c = COLORS[color];
+      const dark = darken(c, 0.55);
+      const SHADOW = 5; // 3D extruded depth (pixel "block" look)
+      // Bottom face (darker, offset down)
+      this.sprite.roundRect(0, SHADOW, size - 1, size - 1, 4).fill(dark);
+      // Top face
+      this.sprite.roundRect(0, 0, size - 1, size - 1, 4).fill(c);
+      // Top sheen
+      this.sprite.roundRect(2, 2, size - 5, 4, 2).fill(lighten(c, 1.3));
+    }
+  }
+  // worldPos = world-space center of this cell (so particles spawn on top of the tile,
+  // not at grid-local coords which appear shifted relative to the fxLayer)
+  destroyCell(scene, worldPos) {
+    if (!this.sprite || this.sprite.destroyed) return;
+    const cx = worldPos.x;
+    const cy = worldPos.y;
+    for (let i = 0; i < 6; i++) {
+      const p = new PIXI.Graphics();
+      const c = COLORS[this.color];
+      p.circle(0, 0, 4 + Math.random() * 3).fill(c);
+      p.position.set(cx, cy);
+      scene.addChild(p);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 22 + Math.random() * 18;
+      tween.add(p.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 420, easeOut);
+      tween.add(p, { alpha: 0 }, 420, easeOut, () => p.destroy());
+      tween.add(p.scale, { x: 0.2, y: 0.2 }, 420, easeOut);
+    }
+    // Cell sprite collapses in its own (grid-local) coord system.
+    this.sprite.pivot.set(this.size / 2, this.size / 2);
+    this.sprite.position.set(this.sprite.position.x + this.size / 2, this.sprite.position.y + this.size / 2);
+    tween.add(this.sprite.scale, { x: 0, y: 0 }, 200, easeOut, () => { if (this.sprite) this.sprite.destroy(); });
+  }
+}
+
+// ============= PIXEL GRID =============
+class PixelGrid {
+  constructor(pattern) {
+    this.container = new PIXI.Container();
+    this.pattern = pattern;
+    this.N = pattern.length;
+    this.cellSize = Math.floor((FRAME.w - 100) / this.N);
+    this.cells = [];
+    this.cellsByColor = {};
+
+    const bg = new PIXI.Graphics();
+    bg.roundRect(0, 0, this.cellSize * this.N + 4, this.cellSize * this.N + 4, 6).fill(COLORS.bgDark);
+    bg.position.set(-2, -2);
+    this.container.addChild(bg);
+
+    for (let y = 0; y < this.N; y++) {
+      const row = [];
+      for (let x = 0; x < this.N; x++) {
+        const ch = pattern[y][x];
+        const cell = new PixelCell(ch, x, y, this.cellSize);
+        cell.sprite.position.set(x * this.cellSize, y * this.cellSize);
+        if (cell.alive) {
+          this.container.addChild(cell.sprite);
+          (this.cellsByColor[ch] ||= []).push(cell);
+        }
+        row.push(cell);
+      }
+      this.cells.push(row);
+    }
+  }
+  // Mark cell as dead immediately (LoS purposes); return its world position for bullet target
+  reserveAndKill(cell) {
+    cell.alive = false;
+    const arr = this.cellsByColor[cell.color];
+    if (arr) {
+      const i = arr.indexOf(cell);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  }
+  worldPosOfCell(cell) {
+    return {
+      x: this.container.x + cell.gx * this.cellSize + this.cellSize / 2,
+      y: this.container.y + cell.gy * this.cellSize + this.cellSize / 2,
+    };
+  }
+  remainingCount() {
+    return Object.values(this.cellsByColor).reduce((a, b) => a + b.length, 0);
+  }
+}
+
+// ============= BENCH (4 INDEPENDENT COLUMN QUEUES) =============
+// Each column is its own FIFO stack. Picking the top of column C only shifts
+// column C upward; columns A/B/D are untouched.
+class Bench {
+  constructor(cols) {
+    this.container = new PIXI.Container();
+    this.mask = new PIXI.Graphics();
+    this.mask
+      .rect(BENCH.x - 70, BENCH.y - 25, BENCH.colW * BENCH_COLS + 140, BENCH.rowH * BENCH_VISIBLE_ROWS - 8)
+      .fill(0xffffff);
+    this.container.addChild(this.mask);
+    this.scrollLayer = new PIXI.Container();
+    this.scrollLayer.mask = this.mask;
+    this.container.addChild(this.scrollLayer);
+
+    this.cols = cols; // cols[colIdx] = [pigs..] with index 0 = top of column
+    this.onPick = null;
+
+    for (let c = 0; c < BENCH_COLS; c++) {
+      for (let r = 0; r < this.cols[c].length; r++) {
+        const pig = this.cols[c][r];
+        pig.benchRow = r;
+        pig.benchCol = c;
+        this.placeAt(pig, r, c, false);
+        pig.container.on('pointertap', () => this._onTap(pig));
+        this.scrollLayer.addChild(pig.container);
+        if (r >= BENCH_VISIBLE_ROWS) pig.container.alpha = 0.6;
+      }
+    }
+  }
+  // Backwards-compat flat list for hint targeting etc.
+  get pigs() {
+    const out = [];
+    for (let c = 0; c < BENCH_COLS; c++) for (const p of this.cols[c]) out.push(p);
+    return out;
+  }
+  placeAt(pig, row, col, animated) {
+    const px = BENCH.x + col * BENCH.colW + BENCH.colW / 2;
+    const py = BENCH.y + row * BENCH.rowH + BENCH.rowH / 2;
+    if (animated) {
+      tween.killOf(pig.container.position, ['x', 'y']);
+      tween.add(pig.container.position, { x: px, y: py }, BENCH_REFLOW_MS, easeOut);
+      tween.add(pig.container, { alpha: row < BENCH_VISIBLE_ROWS ? 1 : 0.6 }, BENCH_REFLOW_MS, easeOut);
+    } else {
+      pig.container.position.set(px, py);
+    }
+  }
+  _onTap(pig) {
+    if (pig.state !== 'bench') return;
+    if (pig.benchRow !== 0) return; // only top of column pickable
+    if (this.onPick) this.onPick(pig);
+  }
+  removePig(pig) {
+    const c = pig.benchCol;
+    const idx = this.cols[c].indexOf(pig);
+    if (idx < 0) return;
+    this.cols[c].splice(idx, 1);
+    // Shift remaining pigs in THIS column up by 1; other columns untouched.
+    for (let r = 0; r < this.cols[c].length; r++) {
+      const p = this.cols[c][r];
+      p.benchRow = r;
+      p.benchCol = c;
+      this.placeAt(p, r, c, true);
+    }
+  }
+}
+
+// Build a 4×9 bench layout honoring color constraints:
+//   row 0: NO purple pigs
+//   row 1: at least 1 purple pig
+//   row 2: at least 3 purple pigs
+//   rows 3-8: random distribution of remaining pigs (round-robin per column)
+function buildBenchLayout(allPigs) {
+  const purple = allPigs.filter(p => p.color === 'P');
+  const others = allPigs.filter(p => p.color !== 'P');
+  const shuf = arr => { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } };
+  shuf(purple); shuf(others);
+
+  const cols = [[], [], [], []];
+
+  // Row 0: 4 non-purple
+  for (let c = 0; c < BENCH_COLS; c++) {
+    cols[c].push(others.shift() || purple.shift());
+  }
+
+  // Row 1: 1 purple + 3 non-purple (random column for the purple)
+  const r1Purple = Math.floor(Math.random() * BENCH_COLS);
+  for (let c = 0; c < BENCH_COLS; c++) {
+    if (c === r1Purple) cols[c].push(purple.shift() || others.shift());
+    else cols[c].push(others.shift() || purple.shift());
+  }
+
+  // Row 2: 3 purple + 1 non-purple (random column for the non-purple)
+  const r2NonPurple = Math.floor(Math.random() * BENCH_COLS);
+  for (let c = 0; c < BENCH_COLS; c++) {
+    if (c === r2NonPurple) cols[c].push(others.shift() || purple.shift());
+    else cols[c].push(purple.shift() || others.shift());
+  }
+
+  // Rows 3-8: distribute remaining round-robin across columns (so each column has 9)
+  const remaining = [...purple, ...others];
+  shuf(remaining);
+  let c = 0;
+  while (remaining.length) {
+    cols[c].push(remaining.shift());
+    c = (c + 1) % BENCH_COLS;
+  }
+  return cols;
+}
+
+// ============= SLOTS =============
+class Slots {
+  constructor() {
+    this.container = new PIXI.Container();
+    this.slots = new Array(NUM_SLOTS).fill(null);
+    this.onRelease = null;
+  }
+  firstFree() { for (let i = 0; i < NUM_SLOTS; i++) if (!this.slots[i]) return i; return -1; }
+  isFull() { return this.slots.every(s => s !== null); }
+  pos(i) { return { x: SLOT_X0 + i * (SLOT_W + SLOT_GAP) + SLOT_W / 2, y: SLOT_ROW_Y }; }
+  occupy(pig, idx) {
+    this.slots[idx] = pig;
+    pig.slotIdx = idx;
+    pig.container.off('pointertap');
+    pig.container.on('pointertap', () => {
+      if (pig.state === 'inSlot' && this.onRelease) this.onRelease(pig);
+    });
+  }
+  vacate(pig) {
+    const idx = this.slots.indexOf(pig);
+    if (idx < 0) return;
+    this.slots[idx] = null;
+    pig.slotIdx = -1;
+    // Reflow: shift right→left into the gap, killing any old position tween first
+    for (let i = idx + 1; i < NUM_SLOTS; i++) {
+      const p = this.slots[i];
+      if (p) {
+        this.slots[i - 1] = p; this.slots[i] = null;
+        p.slotIdx = i - 1;
+        if (p.state === 'inSlot') {
+          tween.killOf(p.container.position, ['x', 'y']);
+          tween.add(p.container.position, this.pos(i - 1), SLOT_REFLOW_MS, easeOut);
+        }
+      }
+    }
+  }
+}
+
+// ============= AUDIO ENGINE (procedural — Web Audio API) =============
+// All sound is synthesized at runtime: no external audio files (MRAID-friendly).
+// AudioContext is suspended until the first user interaction, satisfying both
+// browser autoplay rules and AppLovin's "muted by default" requirement.
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = false;
+    this.musicPlaying = false;
+    this._started = false;
+  }
+
+  bootstrap() {
+    if (this._started) return;
+    this._started = true;
+    this.init().then(() => this.startMusic());
+  }
+
+  async init() {
+    if (this.ctx) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      this.ctx = new Ctx();
+      if (this.ctx.state === 'suspended') await this.ctx.resume();
+    } catch (e) { return; }
+    this.master = this.ctx.createGain();
+    this.master.gain.value = 0.6;
+    this.master.connect(this.ctx.destination);
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.value = 0.16;
+    this.musicGain.connect(this.master);
+    this.sfxGain = this.ctx.createGain();
+    this.sfxGain.gain.value = 0.45;
+    this.sfxGain.connect(this.master);
+  }
+
+  setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.6; }
+
+  // Casual chiptune-y loop in C major pentatonic — 16-beat segment scheduled
+  // recursively. Pieces: walking bass + lead melody + soft kick + hi-hat.
+  startMusic() {
+    if (!this.ctx || this.musicPlaying) return;
+    this.musicPlaying = true;
+    this._musicNext = this.ctx.currentTime + 0.05;
+    this._scheduleMusic();
+  }
+
+  _scheduleMusic() {
+    if (!this.musicPlaying || !this.ctx) return;
+    const beat = 60 / 110; // 110 BPM
+    const segBeats = 16;
+    const t0 = this._musicNext;
+
+    // Bass — one root note every 4 beats: C2 → F2 → G2 → C2
+    const bassNotes = [65.4, 87.3, 98.0, 65.4];
+    for (let i = 0; i < bassNotes.length; i++) {
+      this._tone(t0 + i * 4 * beat, beat * 3.7, bassNotes[i], 'sawtooth', 0.22, 'music');
+    }
+
+    // Lead — pentatonic phrase, 1 note per beat
+    const C5 = 523.25, D5 = 587.33, E5 = 659.25, G5 = 783.99, A5 = 880;
+    const lead = [
+      C5, E5, G5, E5,
+      A5, G5, E5, D5,
+      C5, G5, A5, G5,
+      E5, D5, C5, 0,
+    ];
+    for (let i = 0; i < lead.length; i++) {
+      if (lead[i] === 0) continue;
+      this._tone(t0 + i * beat, beat * 0.82, lead[i], 'square', 0.13, 'music');
+    }
+
+    // Kick on every 4th beat (1, 5, 9, 13)
+    for (let i = 0; i < segBeats; i += 4) this._kick(t0 + i * beat);
+    // Hat on the off-beats (.5 of every other beat)
+    for (let i = 0; i < segBeats; i += 2) this._hat(t0 + (i + 0.5) * beat);
+
+    this._musicNext = t0 + segBeats * beat;
+    // Schedule next segment 1.5s before the current ends, for seamless loop
+    const lookaheadMs = 1500;
+    const nextDelay = Math.max(0, (segBeats * beat) * 1000 - lookaheadMs);
+    setTimeout(() => this._scheduleMusic(), nextDelay);
+  }
+
+  _tone(when, dur, freq, type, amp, channel) {
+    if (!this.ctx) return;
+    const dest = channel === 'music' ? this.musicGain : this.sfxGain;
+    const osc = this.ctx.createOscillator();
+    osc.type = type; osc.frequency.value = freq;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0, when);
+    g.gain.linearRampToValueAtTime(amp, when + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    osc.connect(g); g.connect(dest);
+    osc.start(when); osc.stop(when + dur + 0.02);
+  }
+
+  _kick(when) {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(140, when);
+    osc.frequency.exponentialRampToValueAtTime(40, when + 0.12);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.5, when);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.14);
+    osc.connect(g); g.connect(this.musicGain);
+    osc.start(when); osc.stop(when + 0.16);
+  }
+
+  _hat(when) {
+    if (!this.ctx) return;
+    const dur = 0.05, sr = this.ctx.sampleRate;
+    const bufLen = Math.floor(sr * dur);
+    const buf = this.ctx.createBuffer(1, bufLen, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filt = this.ctx.createBiquadFilter(); filt.type = 'highpass'; filt.frequency.value = 7000;
+    const g = this.ctx.createGain(); g.gain.value = 0.16;
+    src.connect(filt); filt.connect(g); g.connect(this.musicGain);
+    src.start(when);
+  }
+
+  // ---------- SFX ----------
+  playShoot() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.exponentialRampToValueAtTime(220, t + 0.07);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.11);
+  }
+
+  playDestroy() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const dur = 0.09, sr = this.ctx.sampleRate;
+    const bufLen = Math.floor(sr * dur);
+    const buf = this.ctx.createBuffer(1, bufLen, sr);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < bufLen; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / bufLen);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const filt = this.ctx.createBiquadFilter(); filt.type = 'bandpass'; filt.frequency.value = 2200; filt.Q.value = 2;
+    const g = this.ctx.createGain(); g.gain.value = 0.32;
+    src.connect(filt); filt.connect(g); g.connect(this.sfxGain);
+    src.start(t);
+  }
+
+  playVanish() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [880, 1320, 1760, 2200].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.04;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.16, s + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.18);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.2);
+    });
+  }
+
+  playDeploy() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(660, t + 0.14);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.18, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.18);
+  }
+
+  playLand() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.09);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.11);
+    osc.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.13);
+  }
+
+  playWin() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'square'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.1;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.2, s + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.5);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.55);
+    });
+  }
+
+  playLose() {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    [440, 392, 330, 247].forEach((f, i) => {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'square'; osc.frequency.value = f;
+      const g = this.ctx.createGain();
+      const s = t + i * 0.13;
+      g.gain.setValueAtTime(0, s);
+      g.gain.linearRampToValueAtTime(0.2, s + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, s + 0.4);
+      osc.connect(g); g.connect(this.sfxGain);
+      osc.start(s); osc.stop(s + 0.45);
+    });
+  }
+}
+
+// ============= BELT ARROWS (marching loop) =============
+class BeltArrows {
+  constructor() {
+    this.container = new PIXI.Container();
+    this.NUM = 24;
+    this.arrows = [];
+    for (let i = 0; i < this.NUM; i++) {
+      const a = new PIXI.Graphics();
+      a.moveTo(-9, -8).lineTo(0, 0).lineTo(-9, 8).stroke({ color: 0xa0a0c8, width: 4, cap: 'round', join: 'round' });
+      this.arrows.push(a);
+      this.container.addChild(a);
+    }
+    this.t = 0;
+  }
+  update(deltaMS) {
+    // Arrows march at HALF the belt speed for a less hectic visual rhythm
+    this.t = (this.t + deltaMS / ARROW_LOOP_MS) % 1;
+    // Rotation per edge, pointing in CCW direction of motion
+    const ROT = { bottom: 0, right: -Math.PI / 2, top: Math.PI, left: Math.PI / 2 };
+    for (let i = 0; i < this.NUM; i++) {
+      const phase = (this.t + i / this.NUM) % 1;
+      const pt = pointOnBelt(phase);
+      this.arrows[i].position.set(pt.x, pt.y);
+      this.arrows[i].rotation = ROT[pt.edge] ?? 0;
+    }
+  }
+}
+
+// ============= GAME =============
+class Game {
+  constructor(app) {
+    this.app = app;
+    this.scene = null;
+    this.activePigs = [];   // pigs currently lapping/inSlot/transitioning
+    this.won = false;
+    this.lost = false;
+    this.slotWarnT = 0;     // ms remaining on slot warning flash
+    this.audio = new AudioEngine();
+  }
+  countOnBelt() {
+    let n = 0;
+    for (const p of this.activePigs) {
+      if (p.state === 'lapping' || p.state === 'toBelt') n++;
+    }
+    return n;
+  }
+  async init() {
+    this.scene = new PIXI.Container();
+    this.app.stage.addChild(this.scene);
+
+    const bg = new PIXI.Graphics(); bg.rect(0, 0, DESIGN_W, DESIGN_H).fill(COLORS.bg); this.scene.addChild(bg);
+
+    const header = new PIXI.Container(); drawHeader(header, this.audio); this.scene.addChild(header); this._header = header;
+
+    const frameG = new PIXI.Graphics(); drawFrame(frameG); this.scene.addChild(frameG);
+
+    this.pattern = generateMoonPattern(GRID_N);
+    adjustPatternToMultiplesOf5(this.pattern);
+    this.colorCounts = countColors(this.pattern);
+    this.grid = new PixelGrid(this.pattern);
+    const used = this.grid.cellSize * this.grid.N;
+    this.grid.container.x = FRAME.x + (FRAME.w - used) / 2;
+    this.grid.container.y = FRAME.y + (FRAME.h - used) / 2;
+
+    initBeltGeometry(this.grid);
+
+    // Belt visual is drawn AFTER belt geom is known, BEFORE grid (under)
+    const beltG = new PIXI.Graphics();
+    drawBelt(beltG, BELT_GEOM);
+    this.scene.addChild(beltG);
+
+    // Marching arrows on top of belt (under grid)
+    this.arrows = new BeltArrows();
+    this.scene.addChild(this.arrows.container);
+
+    this.scene.addChild(this.grid.container);
+
+    this.slotBarG = new PIXI.Container(); drawSlotBar(this.slotBarG); this.scene.addChild(this.slotBarG);
+    // Red glow used for slot-full warning. Fill is at full alpha; we scale via container.alpha.
+    // Drawn as an inset/border ring around the slot row, similar to the reference.
+    this.slotWarnG = new PIXI.Graphics();
+    const swPad = 14;
+    const swX = SLOT_X0 - swPad, swY = SLOT_ROW_Y - SLOT_W/2 - swPad;
+    const swW = SLOT_TOTAL_W + swPad * 2, swH = SLOT_W + swPad * 2;
+    // Outer glow ring (thick stroke) + a softer fill underneath
+    this.slotWarnG.roundRect(swX, swY, swW, swH, 24).fill({ color: 0xff3030, alpha: 0.18 });
+    this.slotWarnG.roundRect(swX, swY, swW, swH, 24).stroke({ color: 0xff5050, width: 6, alignment: 0.5 });
+    this.slotWarnG.alpha = 0;
+    this.scene.addChild(this.slotWarnG);
+    this.fxLayer = new PIXI.Container(); this.scene.addChild(this.fxLayer);
+
+    const pigData = buildPigs(this.colorCounts);
+    this.pigs = pigData.map(d => new Pig(d.color, d.ammo));
+
+    // Sanity check: total pig ammo per color must equal pixel count per color.
+    {
+      const totals = {};
+      for (const p of this.pigs) totals[p.color] = (totals[p.color] || 0) + p.ammo;
+      for (const [c, expected] of Object.entries(this.colorCounts)) {
+        if ((totals[c] || 0) !== expected) {
+          console.warn(`Ammo mismatch for ${c}: pigs=${totals[c] || 0} vs cells=${expected}`);
+        }
+      }
+    }
+
+    const benchCols = buildBenchLayout(this.pigs);
+    this.bench = new Bench(benchCols);
+    this.bench.onPick = (pig) => this.deployFromBench(pig);
+    this.scene.addChild(this.bench.container);
+
+    this.slots = new Slots();
+    this.slots.onRelease = (pig) => this.releaseFromSlot(pig);
+    this.scene.addChild(this.slots.container);
+
+    this.activeLayer = new PIXI.Container();
+    this.scene.addChild(this.activeLayer);
+
+    this.hint = this._makeHint();
+    this.scene.addChild(this.hint);
+
+    this.winOverlay = this._makeWinOverlay();
+    this.winOverlay.visible = false;
+    this.scene.addChild(this.winOverlay);
+
+    this.loseOverlay = this._makeLoseOverlay();
+    this.loseOverlay.visible = false;
+    this.scene.addChild(this.loseOverlay);
+
+    this.updateHint();
+    this.app.ticker.add((ticker) => this.update(ticker.deltaMS));
+  }
+
+  _makeHint() {
+    const h = new PIXI.Graphics();
+    h.circle(0, 0, 18).fill(0xffffff);
+    h.roundRect(-7, 0, 14, 26, 6).fill(0xffffff);
+    h.circle(0, 0, 18).stroke({ color: 0x1f2233, width: 3 });
+    h.roundRect(-7, 0, 14, 26, 6).stroke({ color: 0x1f2233, width: 3 });
+    h.alpha = 0.95; h.visible = false;
+    return h;
+  }
+  updateHint() {
+    let target = null;
+    // Prefer slot pig (teach release)
+    for (const p of this.activePigs) if (p.state === 'inSlot') { target = p; break; }
+    if (!target) {
+      for (const p of this.bench.pigs) if (p.benchRow === 0 && p.state === 'bench') { target = p; break; }
+    }
+    if (!target) { this.hint.visible = false; return; }
+    this.hint.visible = true;
+    this.hint.position.set(target.container.x + 28, target.container.y + 50);
+  }
+
+  deployFromBench(pig) {
+    if (this.lost || this.won) return;
+    if (this.countOnBelt() >= BELT_CAP) return; // belt full — block silently
+    this.audio.bootstrap();   // first user interaction → starts audio + music
+    this.audio.playDeploy();
+    this.bench.removePig(pig);
+    pig.state = 'toBelt';
+    pig.beltT = 0;
+    pig.resetFiring();
+    this.activeLayer.addChild(pig.container);
+    this.activePigs.push(pig);
+    this._anticipateThenJumpTo(pig, pointOnBelt(0), 380, () => {
+      pig.state = 'lapping';
+      pig.beltT = 0;
+      pig.resetFiring();
+      pig.setEdge(pointOnBelt(0).edge);
+      this._landSquash(pig);
+      this.audio.playLand();
+    });
+    this.updateHint();
+  }
+
+  releaseFromSlot(pig) {
+    if (pig.state !== 'inSlot' || this.lost || this.won) return;
+    if (this.countOnBelt() >= BELT_CAP) return;
+    this.audio.playDeploy();
+    this.slots.vacate(pig);
+    pig.state = 'toBelt';
+    pig.resetFiring();
+    this._anticipateThenJumpTo(pig, pointOnBelt(0), 360, () => {
+      pig.state = 'lapping';
+      pig.beltT = 0;
+      pig.resetFiring();
+      pig.setEdge(pointOnBelt(0).edge);
+      this._landSquash(pig);
+      this.audio.playLand();
+    });
+    this.updateHint();
+  }
+
+  // Squash-anticipation → springy stretch → arc-style move to target → onComplete
+  _anticipateThenJumpTo(pig, target, moveMS, onComplete) {
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.25, 0.65); // anticipation squash
+    setTimeout(() => {
+      if (pig.state === 'dead' || pig.state === 'vanishing') return;
+      // Stretch upward (the "jump")
+      pig.body.scale.set(0.85, 1.2);
+      tween.add(pig.body.scale, { x: 1, y: 1 }, moveMS, easeOut);
+      // Move with a slight arc by tweening Y separately to mid-bounce then to target
+      tween.killOf(pig.container.position, ['x', 'y']);
+      const startX = pig.container.position.x, startY = pig.container.position.y;
+      const peakY = Math.min(startY, target.y) - 50;
+      const t0 = { v: 0 };
+      tween.add(t0, { v: 1 }, moveMS, easeOut, onComplete);
+      // Manual arc — sample t each frame via tween proxy (we update x/y from t0.v ourselves)
+      const tickFn = () => {
+        const t = clamp(t0.v, 0, 1);
+        pig.container.position.x = lerp(startX, target.x, t);
+        // Parabolic arc on Y
+        const yLine = lerp(startY, target.y, t);
+        const arc = Math.sin(t * Math.PI) * (peakY - Math.min(startY, target.y));
+        pig.container.position.y = yLine + arc;
+        if (t >= 1) this.app.ticker.remove(tickFn);
+      };
+      this.app.ticker.add(tickFn);
+    }, 90);
+  }
+
+  // Squash on impact — used when pig lands at belt entry or in a slot
+  _landSquash(pig) {
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.3, 0.65);
+    tween.add(pig.body.scale, { x: 1, y: 1 }, 280, easeOutBack);
+  }
+
+  _flashSlots() { this.slotWarnT = WARN_FLASH_MS; }
+
+  update(deltaMS) {
+    tween.update(deltaMS);
+    if (this._header._ctaTick) this._header._ctaTick();
+
+    // Slot warning: ONLY pulses red when the danger state is true —
+    //   slots are full AND there's a pig on the belt that will eventually
+    //   arrive (= guaranteed lose). Slots-full alone is fine if the belt
+    //   is empty (player can release at leisure).
+    const dangerState = this.slots.isFull() && this.countOnBelt() > 0;
+    let warnAlpha = 0;
+    if (dangerState) {
+      const t = performance.now() / 200;
+      warnAlpha = 0.32 + 0.28 * (Math.sin(t) * 0.5 + 0.5);
+    }
+    if (this.slotWarnT > 0) {
+      this.slotWarnT = Math.max(0, this.slotWarnT - deltaMS);
+      const phase = this.slotWarnT / WARN_FLASH_MS;
+      const burst = phase * (0.5 + 0.3 * Math.abs(Math.sin(phase * 12)));
+      warnAlpha = Math.max(warnAlpha, burst);
+    }
+    this.slotWarnG.alpha = warnAlpha;
+
+    // Marching arrows on belt
+    if (this.arrows) this.arrows.update(deltaMS);
+
+    if (this.lost || this.won) return;
+
+    for (let i = this.activePigs.length - 1; i >= 0; i--) {
+      const pig = this.activePigs[i];
+      if (pig.state !== 'lapping') continue;
+
+      pig.beltT += deltaMS / LAP_MS;
+      if (pig.beltT >= 1) {
+        // Lap complete — must land in a slot
+        const idx = this.slots.firstFree();
+        if (idx >= 0) {
+          this.slots.occupy(pig, idx);
+          pig.state = 'toSlot';
+          const target = this.slots.pos(idx);
+          tween.killOf(pig.container.position, ['x', 'y']);
+          tween.add(pig.container.position, { x: target.x, y: target.y }, SLOT_TRANSIT_MS, easeOut, () => {
+            pig.state = 'inSlot';
+            pig.setView('back', false); // BACK view in slot — same as bench
+            this._landSquash(pig);       // squash on slot impact
+            this.audio.playLand();
+            this.updateHint();
+          });
+        } else {
+          // No free slot — GAME OVER
+          this.gameOver(pig);
+          return;
+        }
+        continue;
+      }
+
+      const p = pointOnBelt(pig.beltT);
+      pig.container.position.set(p.x, p.y);
+      pig.setEdge(p.edge);
+
+      // Cell-transition firing: when pig enters a NEW (col/row, edge) position,
+      // fire one shot if LoS valid. No cooldown — limited only by ammo and travel speed.
+      if (pig.ammo > 0) {
+        const idx = gridIndexFromBelt(p.edge, p.x, p.y);
+        if (idx !== pig.lastFireIdx || p.edge !== pig.lastFireEdge) {
+          pig.lastFireIdx = idx;
+          pig.lastFireEdge = p.edge;
+          const target = losTarget(this.grid, p.edge, idx, pig.color);
+          if (target) this.fireShot(pig, target);
+        }
+      }
+    }
+
+    // Win check
+    if (!this.won && this.grid.remainingCount() === 0) {
+      this.won = true;
+      this.celebrate();
+    }
+  }
+
+  gameOver(arrivingPig) {
+    if (this.lost) return;
+    this.lost = true;
+    this.audio.playLose();
+    this._flashSlots();
+    // Snap arriving pig to a stack near the slots area
+    if (arrivingPig) {
+      const pos = this.slots.pos(NUM_SLOTS - 1);
+      tween.killOf(arrivingPig.container.position, ['x', 'y']);
+      tween.add(arrivingPig.container.position, { x: pos.x + 30, y: pos.y - 30 }, 200, easeOut);
+      arrivingPig.state = 'dead';
+    }
+    setTimeout(() => {
+      this.loseOverlay.visible = true;
+      this.loseOverlay.alpha = 0;
+      tween.add(this.loseOverlay, { alpha: 1 }, 400, easeOut);
+    }, 350);
+  }
+
+  _makeLoseOverlay() {
+    const c = new PIXI.Container();
+    const dim = new PIXI.Graphics();
+    dim.rect(0, 0, DESIGN_W, DESIGN_H).fill({ color: 0x000000, alpha: 0.6 });
+    c.addChild(dim);
+    const t = new PIXI.Text({
+      text: 'OOPS!',
+      style: { fontSize: 110, fontWeight: 900, fill: 0xff5b3a, stroke: { color: 0x1f2233, width: 12 } }
+    });
+    t.anchor.set(0.5); t.position.set(DESIGN_W / 2, 460); c.addChild(t);
+    const sub = new PIXI.Text({
+      text: 'Slots overflowed!',
+      style: { fontSize: 36, fontWeight: 700, fill: 0xffffff }
+    });
+    sub.anchor.set(0.5); sub.position.set(DESIGN_W / 2, 560); c.addChild(sub);
+    const btn = new PIXI.Graphics();
+    btn.roundRect(-180, -50, 360, 100, 28).fill(0xffc940);
+    btn.roundRect(-176, -46, 352, 92, 24).stroke({ color: 0xc8951a, width: 4 });
+    const btnT = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 44, fontWeight: 900, fill: 0x1f2233 } });
+    btnT.anchor.set(0.5); btn.addChild(btnT);
+    btn.position.set(DESIGN_W / 2, 720);
+    btn.eventMode = 'static'; btn.cursor = 'pointer';
+    btn.on('pointertap', () => {
+      if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+      else window.open('https://example.com', '_blank');
+    });
+    c.addChild(btn);
+    return c;
+  }
+
+  fireShot(pig, cell) {
+    // 1) Reserve target cell so other pigs don't aim at the same one
+    this.grid.reserveAndKill(cell);
+    // 2) Decrement ammo IMMEDIATELY so cell-transition firing gate cannot allow
+    //    extra shots while bullets are still in flight (fixes "1-ammo fires 2 shots")
+    pig.setAmmo(pig.ammo - 1);
+    pig.popLabel();
+    pig.pendingBullets++;
+    this.audio.playShoot();
+
+    // 3) Stretch & squash recoil — wide flat squash, then springy snap back
+    tween.killOf(pig.body.scale, ['x', 'y']);
+    pig.body.scale.set(1.28, 0.74);
+    tween.add(pig.body.scale, { x: 1, y: 1 }, 240, easeOutBack);
+
+    // 4) Spawn bullet from current pig position toward target world position
+    const from = { x: pig.container.x, y: pig.container.y };
+    const to = this.grid.worldPosOfCell(cell);
+    const bullet = new PIXI.Graphics();
+    const c = COLORS[pig.color];
+    bullet.circle(0, 0, 9).fill(c);
+    bullet.circle(0, 0, 4).fill(lighten(c, 1.4));
+    bullet.circle(0, 0, 9).stroke({ color: 0xffffff, width: 2, alpha: 0.6 });
+    bullet.position.set(from.x, from.y);
+    this.fxLayer.addChild(bullet);
+
+    tween.add(bullet.position, { x: to.x, y: to.y }, BULLET_MS, easeOut, () => {
+      cell.destroyCell(this.fxLayer, to);
+      this.audio.playDestroy();
+      bullet.destroy();
+      pig.pendingBullets = Math.max(0, pig.pendingBullets - 1);
+      // Subtle screen shake
+      this.scene.x = (Math.random() - 0.5) * 3;
+      this.scene.y = (Math.random() - 0.5) * 3;
+      tween.add(this.scene, { x: 0, y: 0 }, 100, easeOut);
+      // Vanish only when ammo zero AND no more bullets in flight
+      if (pig.ammo <= 0 && pig.pendingBullets <= 0 && pig.state !== 'vanishing' && pig.state !== 'dead') {
+        this.vanish(pig);
+      }
+    });
+  }
+
+  vanish(pig) {
+    if (pig.state === 'vanishing' || pig.state === 'dead') return;
+    pig.state = 'vanishing';
+    pig.container.eventMode = 'none';
+    this.audio.playVanish();
+    if (pig.slotIdx >= 0) this.slots.vacate(pig);
+    const cx = pig.container.x, cy = pig.container.y;
+    for (let i = 0; i < 8; i++) {
+      const s = new PIXI.Graphics();
+      s.star(0, 0, 4, 8, 4).fill(0xfff8a0);
+      s.position.set(cx, cy);
+      this.fxLayer.addChild(s);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 80 + Math.random() * 50;
+      tween.add(s.position, { x: cx + Math.cos(ang) * dist, y: cy + Math.sin(ang) * dist }, 600, easeOut);
+      tween.add(s, { alpha: 0, rotation: Math.PI * 2 }, 600, easeOut, () => s.destroy());
+      tween.add(s.scale, { x: 0.2, y: 0.2 }, 600, easeOut);
+    }
+    tween.add(pig.container.scale, { x: 0, y: 0 }, VANISH_MS, easeOut);
+    tween.add(pig.container, { rotation: Math.PI * 3, alpha: 0 }, VANISH_MS, easeOut, () => {
+      pig.state = 'dead';
+      const i = this.activePigs.indexOf(pig);
+      if (i >= 0) this.activePigs.splice(i, 1);
+      pig.container.destroy();
+      this.updateHint();
+    });
+  }
+
+  _makeWinOverlay() {
+    const c = new PIXI.Container();
+    const dim = new PIXI.Graphics();
+    dim.rect(0, 0, DESIGN_W, DESIGN_H).fill({ color: 0x000000, alpha: 0.55 });
+    c.addChild(dim);
+    const t = new PIXI.Text({ text: 'YOU WIN!', style: { fontSize: 96, fontWeight: 900, fill: 0xffd24a, stroke: { color: 0x1f2233, width: 12 } } });
+    t.anchor.set(0.5); t.position.set(DESIGN_W / 2, 480); c.addChild(t);
+    const btn = new PIXI.Graphics();
+    btn.roundRect(-180, -50, 360, 100, 28).fill(0xffc940);
+    btn.roundRect(-176, -46, 352, 92, 24).stroke({ color: 0xc8951a, width: 4 });
+    const btnT = new PIXI.Text({ text: 'PLAY NOW', style: { fontSize: 44, fontWeight: 900, fill: 0x1f2233 } });
+    btnT.anchor.set(0.5); btn.addChild(btnT);
+    btn.position.set(DESIGN_W / 2, 700);
+    btn.eventMode = 'static'; btn.cursor = 'pointer';
+    btn.on('pointertap', () => {
+      if (typeof mraid !== 'undefined' && mraid.open) mraid.open('https://example.com');
+      else window.open('https://example.com', '_blank');
+    });
+    c.addChild(btn);
+    return c;
+  }
+  celebrate() {
+    this.audio.playWin();
+    for (let i = 0; i < 40; i++) {
+      const conf = new PIXI.Graphics();
+      const colors = [0xff5b3a, 0xffd24a, 0x4ec3d8, 0xb070dd, 0xfafafa];
+      conf.rect(-6, -10, 12, 20).fill(colors[i % colors.length]);
+      conf.position.set(DESIGN_W / 2 + (Math.random() - 0.5) * 200, 200);
+      conf.rotation = Math.random() * Math.PI * 2;
+      this.fxLayer.addChild(conf);
+      tween.add(conf.position, { x: Math.random() * DESIGN_W, y: DESIGN_H + 50 }, 1800 + Math.random() * 1000, easeOut);
+      tween.add(conf, { rotation: conf.rotation + Math.random() * 6 - 3 }, 1800, easeOut, () => conf.destroy());
+    }
+    setTimeout(() => {
+      this.winOverlay.visible = true; this.winOverlay.alpha = 0;
+      tween.add(this.winOverlay, { alpha: 1 }, 400, easeOut);
+    }, 800);
+  }
+}
+
+// ============= BOOT =============
+async function main() {
+  const app = new PIXI.Application();
+  await app.init({
+    width: DESIGN_W, height: DESIGN_H,
+    backgroundColor: COLORS.bg, antialias: true, autoDensity: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+  });
+  document.getElementById('stage').appendChild(app.canvas);
+
+  const fit = () => {
+    const W = window.innerWidth, H = window.innerHeight;
+    const scale = Math.min(W / DESIGN_W, H / DESIGN_H);
+    app.canvas.style.width = (DESIGN_W * scale) + 'px';
+    app.canvas.style.height = (DESIGN_H * scale) + 'px';
+  };
+  fit(); window.addEventListener('resize', fit); window.addEventListener('orientationchange', fit);
+
+  const game = new Game(app);
+  await game.init();
+  window.__GAME__ = game;
+  window.__APP__ = app;
+
+  if (typeof mraid === 'undefined') window.mraid = { open: (url) => window.open(url, '_blank') };
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main);
+else main();
+</script>
+</body>
+</html>
