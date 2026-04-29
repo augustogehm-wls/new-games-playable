@@ -510,6 +510,9 @@ function layoutBottles() {
     b.x = x;     b.y = y;
     b.w = gw;    b.h = gh;
     b.capacity = CAPACITY;
+    // Volume-aware layer surfaces (compensates for the curved-bottom
+    // bowl absorbing area near the floor).
+    b.layerYs = computeLayerYs(b);
   }
 
   // Objective: aligned EXACTLY with grid vertical extent
@@ -529,6 +532,8 @@ function layoutBottles() {
   GOAL_UNITS = Math.min(24, objective.capacity);
   objective.baseX = objective.x;
   objective.baseY = objective.y;
+  // Objective is a straight cylinder — its layerYs are uniform.
+  objective.layerYs = computeLayerYs(objective);
 }
 
 // ============================================================
@@ -966,10 +971,15 @@ function potionBottleBodyPath(w, h) {
   const xNeckL = -xNeckR;
   const xLipR  = w * POTION_LIP_X_FRAC;
   const xLipL  = -xLipR;
-  const taperBottom = w * 0.04;
-  const xBotR = xBodyR - taperBottom;
-  const xBotL = xBodyL + taperBottom;
-  const botCornerR = w * 0.18;
+  // Rounded "apothecary bottle" bottom — the floor is a continuous curve
+  // from one side wall to the other (no flat segment), with the deepest
+  // point at the centre. botCornerR controls the curve depth (vertical
+  // distance from where the curve meets the side wall down to the
+  // deepest centre point). 0.42·w gives a near-semicircular bowl that
+  // lines up with the bottle's interior radius (~0.45·w) — the previous
+  // flat floor + tiny corner-arcs (0.18·w) read as a reta and was
+  // making the bottom liquid layer feel cramped/invisible.
+  const botCornerR = w * 0.42;
   const lipCornerR = w * POTION_LIP_FLARE * 0.4;
   const shoulderSpan = yShoulderBot - yNeckBot;        // positive (y is more positive at bottom)
   const sCurveBias = 0.35;                             // how far the bezier ctl-pts pull along the curve
@@ -990,13 +1000,13 @@ function potionBottleBodyPath(w, h) {
     xBodyR, yShoulderBot - shoulderSpan * sCurveBias,
     xBodyR, yShoulderBot
   );
-  // Right body wall
+  // Right body wall down to where the rounded floor starts
   ctx.lineTo(xBodyR, yBodyBot - botCornerR);
-  // Bottom-right corner
-  ctx.quadraticCurveTo(xBodyR, yBodyBot, xBotR, yBodyBot);
-  // Floor (right → left)
-  ctx.lineTo(xBotL, yBodyBot);
-  // Bottom-left corner
+  // ROUNDED FLOOR — single continuous curve from right wall through
+  // centre-bottom to left wall (replaces the previous flat floor + tiny
+  // corner-arcs). Two quadratics meeting tangent-horizontal at the
+  // centre give a smooth bowl whose deepest point is at (0, yBodyBot).
+  ctx.quadraticCurveTo(xBodyR, yBodyBot, 0, yBodyBot);
   ctx.quadraticCurveTo(xBodyL, yBodyBot, xBodyL, yBodyBot - botCornerR);
   // Left body wall up to shoulder
   ctx.lineTo(xBodyL, yShoulderBot);
@@ -1043,10 +1053,10 @@ function potionBottleInteriorPath(w, h) {
   const xLipR  = w * POTION_LIP_X_FRAC - neckInset;
   const xLipL  = -xLipR;
 
-  const taperBottom = (w - wallX*2) * 0.04;
-  const xBotR = xBodyR - taperBottom;
-  const xBotL = xBodyL + taperBottom;
-  const botCornerR = (w - wallX*2) * 0.18;
+  // Same rounded "apothecary bottle" bottom as the exterior path — must
+  // match exactly so the liquid clip follows the visible glass outline.
+  // botCornerR sets the curve depth (deepest point at (0, yBodyBot)).
+  const botCornerR = (w - wallX*2) * 0.42;
   const lipCornerR = (w * POTION_LIP_FLARE) * 0.4 * 0.9;
 
   const shoulderSpan = yShoulderBot - yNeckBot;
@@ -1065,8 +1075,9 @@ function potionBottleInteriorPath(w, h) {
     xBodyR, yShoulderBot
   );
   ctx.lineTo(xBodyR, yBodyBot - botCornerR);
-  ctx.quadraticCurveTo(xBodyR, yBodyBot, xBotR, yBodyBot);
-  ctx.lineTo(xBotL, yBodyBot);
+  // Continuous rounded floor — two quadratics meeting tangent-horizontal
+  // at the centre. Liquid clipped to this path naturally fills the bowl.
+  ctx.quadraticCurveTo(xBodyR, yBodyBot, 0, yBodyBot);
   ctx.quadraticCurveTo(xBodyL, yBodyBot, xBodyL, yBodyBot - botCornerR);
   ctx.lineTo(xBodyL, yShoulderBot);
   ctx.bezierCurveTo(
@@ -1144,9 +1155,97 @@ function getInteriorBounds(b) {
   return { l: -iw/2, r: iw/2, w: iw, t: top, b: bot, h: bot - top };
 }
 
+// ============================================================
+// VOLUME-AWARE LAYER SURFACE Y'S
+// ============================================================
+// Each "unit" of liquid is supposed to have the same volume regardless of
+// where it sits in the bottle. The potion bottle's curved bottom (a
+// continuous bowl from one wall to the other, of vertical depth BR)
+// narrows the available area near the floor — if we kept layers at a
+// uniform LAYER_PX vertical height, the bottom unit would actually
+// contain LESS volume than every unit above it. Visually that reads as
+// "the bottom layer is much smaller than the layer above it" (which is
+// exactly the artefact you noticed).
+//
+// To fix it, we pre-compute the y-coordinate of each integer fill-level
+// surface so that successive surfaces enclose equal AREA (= equal
+// volume in 2D). With:
+//   curve area  : Acurve = (5/6) · W · BR        (closed-form integral)
+//   total area  : Atotal = W · (H − BR/6)
+//   area / unit : Aunit  = Atotal / capacity
+// the surface above k units (fillLevel = k) sits at height z_k above the
+// floor (interior.b), where:
+//   if k·Aunit ≤ Acurve  → z_k is inside the curve, found by inverting
+//     V(z) = W · ((4/3)·z^1.5/√BR  −  z²/(2·BR))  via a binary search
+//   else                → z_k = BR + (k·Aunit − Acurve)/W  (rect part)
+//
+// The tall-flask objective is a straight cylinder (BR = 0) so its
+// surfaces are uniform. Stored on each bottle at layout time as
+// b.layerYs[k] (local-coord y, k = 0..capacity).
+function computeLayerYs(b) {
+  const interior = getInteriorBounds(b);
+  const cap = b.capacity || CAPACITY;
+  const ys = new Array(cap + 1);
+
+  // Curve depth in INTERIOR coords. Must match potionBottleInteriorPath.
+  const wallX = b.w * 0.05;
+  const BR = b.isObjective ? 0 : (b.w - wallX * 2) * 0.42;
+  const W = interior.w;
+  const H = interior.h;
+
+  if (BR <= 0 || H <= 0) {
+    // Cylindrical / no-curve fallback — uniform layers.
+    const dy = H / cap;
+    for (let k = 0; k <= cap; k++) ys[k] = interior.b - k * dy;
+    return ys;
+  }
+
+  const curveArea = (5 / 6) * W * BR;
+  const totalArea = W * (H - BR / 6);
+  const aUnit = totalArea / cap;
+
+  ys[0] = interior.b;
+  for (let k = 1; k <= cap; k++) {
+    const targetV = k * aUnit;
+    let z;
+    if (targetV >= curveArea) {
+      // Surface sits in the rect part above the curve.
+      z = BR + (targetV - curveArea) / W;
+    } else {
+      // Surface sits inside the curve — invert V(z) numerically.
+      // V(z) = W · ((4/3)·z^1.5/√BR  −  z²/(2·BR))
+      let lo = 0, hi = BR;
+      for (let iter = 0; iter < 24; iter++) {
+        const mid = (lo + hi) * 0.5;
+        const v = W * ((4 / 3) * Math.pow(mid, 1.5) / Math.sqrt(BR) - (mid * mid) / (2 * BR));
+        if (v < targetV) lo = mid; else hi = mid;
+      }
+      z = (lo + hi) * 0.5;
+    }
+    ys[k] = interior.b - z;
+  }
+  return ys;
+}
+
+// Local-coord version of getLayerTopY (no b.y / b.lift offset). Linear
+// interpolation between the integer-fillLevel surfaces — accurate at
+// integer fillLevels (the only states the player ever rests at) and
+// good enough during the 0.42 s pour tween for fractional values.
+function getLayerTopYLocal(b, fillUnits) {
+  if (!b.layerYs) {
+    const i = getInteriorBounds(b);
+    return i.b - fillUnits * LAYER_PX;
+  }
+  const cap = b.capacity || CAPACITY;
+  if (fillUnits >= cap) return b.layerYs[cap];
+  if (fillUnits <= 0) return b.layerYs[0];
+  const k = Math.floor(fillUnits);
+  const f = fillUnits - k;
+  return b.layerYs[k] + f * (b.layerYs[k + 1] - b.layerYs[k]);
+}
+
 function getLayerTopY(b, fillUnits) {
-  const i = getInteriorBounds(b);
-  return b.y + b.lift + (i.b - fillUnits * LAYER_PX);
+  return b.y + b.lift + getLayerTopYLocal(b, fillUnits);
 }
 
 // ============================================================
@@ -1541,9 +1640,17 @@ function drawJuiceLayersWorld(b) {
     const isTop = (ri === runs.length - 1);
     const isBottom = (ri === 0);
 
-    const baseY = interior.b - run.fromIdx * LAYER_PX;
-    const topSolidY = interior.b - run.toIdx * LAYER_PX;
-    const topY = isTop ? (interior.b - b.fillLevel * LAYER_PX) : topSolidY;
+    // Use the bottle's pre-computed volume-aware layer surfaces. For
+    // potion bottles these are NOT evenly spaced — the bottom-most layer
+    // extends a bit further to compensate for the curved-floor bowl
+    // having less area per pixel of height than the rect part above it.
+    // (Old: interior.b − idx · LAYER_PX. That gave every unit the same
+    // vertical pixels and so the bottom unit ended up holding less
+    // volume than the units stacked on top, which read visually as a
+    // shrunken bottom layer.)
+    const baseY = b.layerYs ? b.layerYs[run.fromIdx] : (interior.b - run.fromIdx * LAYER_PX);
+    const topSolidY = b.layerYs ? b.layerYs[run.toIdx] : (interior.b - run.toIdx * LAYER_PX);
+    const topY = isTop ? getLayerTopYLocal(b, b.fillLevel) : topSolidY;
     const visH = baseY - topY;
     if (visH <= 0.5) continue;
 
@@ -1596,15 +1703,17 @@ function drawJuiceLayersWorld(b) {
     const thisRun = runs[ri];
     const nextRun = runs[ri + 1];
     const upperJuice = JUICE[nextRun.color];
-    const interfaceY = interior.b - thisRun.toIdx * LAYER_PX;
+    const interfaceY = b.layerYs ? b.layerYs[thisRun.toIdx] : (interior.b - thisRun.toIdx * LAYER_PX);
 
     // Skip the ellipse when the upper run is still practically empty
     // (very early in the pour tween) — avoids a flash of upper color
     // before the actual rect is visible.
     const isUpperTop = (ri + 1 === runs.length - 1);
-    const upperHeight = isUpperTop
-      ? (b.fillLevel - nextRun.fromIdx) * LAYER_PX
-      : (nextRun.toIdx - nextRun.fromIdx) * LAYER_PX;
+    const upperBotY = b.layerYs ? b.layerYs[nextRun.fromIdx] : (interior.b - nextRun.fromIdx * LAYER_PX);
+    const upperTopY = isUpperTop
+      ? getLayerTopYLocal(b, b.fillLevel)
+      : (b.layerYs ? b.layerYs[nextRun.toIdx] : (interior.b - nextRun.toIdx * LAYER_PX));
+    const upperHeight = upperBotY - upperTopY;
     if (upperHeight < 1) continue;
 
     drawInterfaceEllipse(interfaceY, rx, ry, upperJuice);
@@ -1616,7 +1725,7 @@ function drawJuiceLayersWorld(b) {
   // alive during motion, but it never fades away.
   const topRun = runs[runs.length - 1];
   const topJuice = JUICE[topRun.color];
-  const topY = interior.b - b.fillLevel * LAYER_PX;
+  const topY = getLayerTopYLocal(b, b.fillLevel);
   // No threshold — when slosh = 0, bob = 0 automatically (multiply by 0).
   // The previous `slosh > 0.01` cutoff was snapping the meniscus from its
   // last bob position straight to topY, contributing to the visible jump.
@@ -1632,22 +1741,55 @@ function drawJuiceLayersWorld(b) {
   // no longer aligns with the actual visual bottom of the rotated body —
   // it'd float in the middle of the liquid wedge. Smooth fade between
   // 0.05 rad and 0.25 rad of tilt so the transition is invisible.
+  //
+  // SCALED FOR THIN BOTTOM RUNS — without scaling, ry = rx*0.32 works out
+  // to roughly 38–41 % of LAYER_PX (because layer height comes from h and
+  // ry comes from w, and h ≈ 2.4–2.6×w). For a 1-unit bottom layer that
+  // meant the bottom ~38 % of the visible band was painted in the very
+  // dark juice.bot, plus the bottom of the rect's gradient was already
+  // juice.mid — so a single-unit layer read as a small light dome on top
+  // of a near-black wedge, "almost faded out" against the dark witch
+  // background. Capping baseRy at 30 % of the bottom-run's visible height
+  // (and accounting for the in-flight fillLevel tween when this run is
+  // also the top) keeps the curved-floor perspective hint while leaving
+  // the bulk of a 1-unit layer showing the bright juice.mid fill.
   const tiltFade = 1 - Math.min(1, Math.max(0, Math.abs(b.angle) - 0.05) / 0.20);
   if (tiltFade > 0.01) {
     const bottomRun = runs[0];
     const bottomJuice = JUICE[bottomRun.color];
-    const baseG = ctx.createRadialGradient(0, interior.b - ry * 0.35, rx * 0.08, 0, interior.b, rx);
-    baseG.addColorStop(0, bottomJuice.mid);
-    baseG.addColorStop(0.7, bottomJuice.bot);
-    baseG.addColorStop(1, bottomJuice.bot);
-    ctx.save();
-    ctx.globalAlpha = tiltFade;
-    ctx.fillStyle = baseG;
-    ctx.beginPath();
-    ctx.ellipse(0, interior.b, rx, ry, 0, Math.PI, 2 * Math.PI);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
+    // Visible vertical span of the bottom run, in local coords. With
+    // volume-aware layer Ys this naturally accounts for the bottom
+    // layer being taller than the rest (because the curved bowl
+    // absorbs less area per pixel of height).
+    const bottomBotY = b.layerYs ? b.layerYs[bottomRun.fromIdx] : interior.b;
+    const bottomTopY = (runs.length === 1)
+      ? getLayerTopYLocal(b, b.fillLevel)
+      : (b.layerYs ? b.layerYs[bottomRun.toIdx] : (interior.b - bottomRun.toIdx * LAYER_PX));
+    const bottomRunPx = bottomBotY - bottomTopY;
+    const baseRy = Math.min(ry, bottomRunPx * 0.30);
+    if (baseRy > 0.5) {
+      // Lightened radial gradient: juice.mid fills the inner ~55 % so the
+      // visible band stays vibrant; juice.bot only at the outer edges
+      // (corners) preserves perspective curvature without darkening the
+      // entire layer. Previously the gradient hit juice.bot at 70 % of
+      // the radius, which made even thicker layers' floors slightly
+      // washed-out and was the dominant color of every 1-unit layer.
+      const baseG = ctx.createRadialGradient(
+        0, interior.b - baseRy * 0.35, rx * 0.08,
+        0, interior.b, rx
+      );
+      baseG.addColorStop(0,    bottomJuice.mid);
+      baseG.addColorStop(0.55, bottomJuice.mid);
+      baseG.addColorStop(1,    bottomJuice.bot);
+      ctx.save();
+      ctx.globalAlpha = tiltFade;
+      ctx.fillStyle = baseG;
+      ctx.beginPath();
+      ctx.ellipse(0, interior.b, rx, baseRy, 0, Math.PI, 2 * Math.PI);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
   }
 }
 
