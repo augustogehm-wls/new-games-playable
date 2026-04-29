@@ -860,6 +860,18 @@ class Pig {
 
     this.container.eventMode = 'static';
     this.container.cursor = 'pointer';
+    // Generous hit area for mobile touch. Width 120 leaves a 25 px gap
+    // between adjacent bench columns (colW 145) and a 4 px gap between
+    // slots (pitch 124) — no horizontal overlap. Height 125 deliberately
+    // exceeds the bench rowH (95) by 30 px so each ship's hit area extends
+    // ~27 px above its cell (into the gap above) and slightly into the row
+    // below. Vertical overlap is resolved by REVERSING z-order in the bench
+    // (row 0 added LAST → highest z) so row 0 — the only pickable row —
+    // wins disputes with the row 1 ship's expanded hit area.
+    //
+    // Asymmetric vertical bias: -75 above, +50 below so the LABEL area
+    // (which sits at y=-45 ± 16) gets a more generous touch margin.
+    this.container.hitArea = new PIXI.Rectangle(-60, -75, 120, 125);
   }
 
   // Compatibility shim — old code calls setView('back'/'front'/'side', ...).
@@ -1140,7 +1152,11 @@ class Bench {
     this.onPick = null;
 
     for (let c = 0; c < BENCH_COLS; c++) {
-      for (let r = 0; r < this.cols[c].length; r++) {
+      // Add pigs in REVERSE row order so row 0 (the only pickable row) ends up
+      // on TOP of its column in z-order. This ensures the expanded hit area
+      // (which extends ~30 px into the row below) wins tap disputes against
+      // row 1's overlap region — making row 0 maximally easy to tap on mobile.
+      for (let r = this.cols[c].length - 1; r >= 0; r--) {
         const pig = this.cols[c][r];
         pig.benchRow = r;
         pig.benchCol = c;
@@ -1170,7 +1186,15 @@ class Bench {
   }
   _onTap(pig) {
     if (pig.state !== 'bench') return;
-    if (pig.benchRow !== 0) return; // only top of column pickable
+    // Rows 3+ are clipped by the visibility mask — ignore taps there silently
+    // (the player can't see them, so feedback would be invisible).
+    if (pig.benchRow >= BENCH_VISIBLE_ROWS) return;
+    if (pig.benchRow !== 0) {
+      // Visible but not pickable (row 1 or 2) — give the player a "blocked"
+      // shake + red flash via the registered callback.
+      if (this.onBlockedTap) this.onBlockedTap(pig);
+      return;
+    }
     if (this.onPick) this.onPick(pig);
   }
   removePig(pig) {
@@ -1734,6 +1758,8 @@ class Game {
     const benchCols = buildBenchLayout(this.pigs);
     this.bench = new Bench(benchCols);
     this.bench.onPick = (pig) => this.deployFromBench(pig);
+    // Tap on a non-row-0 (visible-but-blocked) bench ship → shake + red flash
+    this.bench.onBlockedTap = (pig) => this._shakeBlocked(pig);
     // Divider line between bench row 0 and row 1 — drawn BEFORE the bench so
     // labels render over the line in their column area, leaving the dashes
     // visible only in the gaps between columns (HUD seam aesthetic).
@@ -1771,6 +1797,38 @@ class Game {
   // Tap-hint reticle was removed — it didn't fit the asteroid theme. Kept this
   // as a no-op so the existing `this.updateHint()` call sites stay valid.
   updateHint() {}
+
+  // Visual feedback when the player taps a bench ship that is not at the top
+  // of its column (= blocked / not pickable yet). Brief horizontal shake +
+  // red tint that fades back to normal — communicates "this ship can't be
+  // selected right now" without disrupting gameplay.
+  _shakeBlocked(pig) {
+    if (pig._shakeBlockedActive) return;        // ignore taps while already shaking
+    pig._shakeBlockedActive = true;
+    const startX = pig.container.position.x;
+    const TOTAL = 360;
+    let elapsed = 0;
+    const tickFn = (t) => {
+      elapsed += t.deltaMS;
+      if (elapsed >= TOTAL) {
+        pig.container.position.x = startX;
+        pig.body.tint = 0xffffff;
+        pig._shakeBlockedActive = false;
+        this.app.ticker.remove(tickFn);
+        return;
+      }
+      // Sine-wave shake on x with linear decay (4 wiggles over 360 ms)
+      const phase = (elapsed / TOTAL) * Math.PI * 8;
+      const decay = 1 - (elapsed / TOTAL);
+      pig.container.position.x = startX + Math.sin(phase) * 9 * decay;
+      // Red flash that fades back to white over the same duration
+      const fadeT = elapsed / TOTAL;
+      const g = Math.round(0x44 + (0xff - 0x44) * fadeT);
+      const b = Math.round(0x44 + (0xff - 0x44) * fadeT);
+      pig.body.tint = (0xff << 16) | (g << 8) | b;
+    };
+    this.app.ticker.add(tickFn);
+  }
 
   // ---------- Mission timer ----------
   _makeTimerHud() {
