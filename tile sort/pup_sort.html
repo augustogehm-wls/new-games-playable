@@ -2,12 +2,15 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,user-scalable=no,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <title>Pup Sort — Cute Puppies</title>
 <style>
   * { padding:0; margin:0; user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; }
   html, body { background:#f7e2bf; position:absolute; top:0; right:0; left:0; bottom:0; overflow:hidden; }
-  canvas { position:fixed; top:0; left:0; display:block; touch-action:none; }
+  /* touch-action: pinch-zoom — single-finger drags are owned by JS
+     (preventDefault'd in onPointerMove), but pinch-zoom is left to the
+     browser so the player can scale the playable when needed. */
+  canvas { position:fixed; top:0; left:0; display:block; touch-action:pinch-zoom; }
 </style>
 </head>
 <body>
@@ -47,7 +50,14 @@ function resize() {
   layoutBoard();
 }
 window.addEventListener('resize', resize);
-window.addEventListener('orientationchange', resize);
+// Some mobile browsers fire orientationchange BEFORE the new viewport
+// dimensions are applied, so window.innerWidth/Height read stale values
+// inside resize(). A short defer + a follow-up resize covers both the
+// fast and slow cases and keeps the canvas filling the screen on rotate.
+window.addEventListener('orientationchange', () => {
+  setTimeout(resize, 50);
+  setTimeout(resize, 350);
+});
 
 // ============================================================
 // TWEEN ENGINE
@@ -558,10 +568,13 @@ function buildLevel() {
 // ============================================================
 let board = { x: 0, y: 0, cellW: 0, cellH: 0, slotW: 0, slotH: 0 };
 function layoutBoard() {
-  // Pad on top/bottom for logo + CTA later
-  const padX = Math.max(12, W * 0.02);
-  const padTop = Math.max(40, H * 0.06);
-  const padBot = Math.max(40, H * 0.06);
+  // Tight viewport padding so the board fills as much of the screen as
+  // possible — the logo is gone, so we don't need to reserve a top band
+  // for it. Just enough margin to keep the outer wood frame from kissing
+  // the screen edges.
+  const padX   = Math.max(6, W * 0.010);
+  const padTop = Math.max(6, H * 0.012);
+  const padBot = Math.max(6, H * 0.012);
   const availW = W - padX * 2;
   const availH = H - padTop - padBot;
   // Each cell aspect: 3 slots horizontally, ~1.0:0.85 (slightly taller)
@@ -1045,37 +1058,6 @@ function drawWinOverlay() {
   ctx.restore();
 }
 
-// PUP SORT logo — top-left corner. Painted on every frame (cheap, ~10
-// ops). Uses a small paw glyph + bold word-mark so the brand reads at a
-// glance even if the player ignores it.
-function drawLogo() {
-  if (won) return;
-  const padX = Math.max(14, W * 0.018);
-  const padY = Math.max(10, H * 0.018);
-  const fontSize = Math.max(20, Math.min(40, H * 0.045));
-  const pawR = fontSize * 0.85;
-  const cx = padX + pawR;
-  const cy = padY + pawR;
-
-  ctx.save();
-  // Paw glyph — same colour as the panel paws so the theme reads consistent.
-  ctx.fillStyle = '#8a4a1f';
-  drawPaw(ctx, cx, cy - pawR * 0.05, pawR, -0.15);
-
-  // Word-mark — two-tone (dark brown shadow, cream highlight).
-  ctx.font = '900 ' + fontSize + 'px system-ui,-apple-system,sans-serif';
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  const tx = cx + pawR + fontSize * 0.35;
-  ctx.fillStyle = 'rgba(60, 30, 10, 0.25)';
-  ctx.fillText('PUP SORT', tx + 2, cy + 2);
-  ctx.fillStyle = '#fff5dc';
-  ctx.fillText('PUP SORT', tx, cy);
-  ctx.lineWidth = Math.max(2, fontSize * 0.08);
-  ctx.strokeStyle = '#8a4a1f';
-  ctx.strokeText('PUP SORT', tx, cy);
-  ctx.restore();
-}
 
 // ============================================================
 // INPUT — drag & drop
@@ -1634,7 +1616,6 @@ function loop(now) {
   drawParticles();
   drawTutorialHand();
   drawDragItem();
-  drawLogo();
   drawWinOverlay();
   drawConfetti();   // on top of the win overlay so confetti rains over the title
   requestAnimationFrame(loop);
