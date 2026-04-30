@@ -848,7 +848,12 @@ function canPour(src, dst) {
 //
 // Used in executePour to replace the previous fixed-58° tilt that
 // caused full bottles to tip way too far and have their top layers
-// pushed above the rotated rim line.
+// pushed above the rotated rim line. The full 30°-100° range is used
+// (no artificial cap) so the last-unit pour tilts dramatically toward
+// inverted, draining the cup visually to empty. drawJuiceLayersWorld
+// uses a stack-anchored-to-rotated-floor model that stays geometrically
+// correct at extreme tilts (replaces the old lowerRimY compression that
+// broke past ~79°).
 function getPourTiltDeg(fillUnits, capacity) {
   const pct = (fillUnits / capacity) * 100;
   // Magic-sort's table — anchor points, linearly interpolated between.
@@ -883,15 +888,11 @@ function executePour(src, dst) {
   // average (a) so a full source bottle barely tips (small tilt is all
   // that's needed to start the spill — physically correct) and (b) so
   // the bottle holds a single visually consistent angle through the
-  // pour. Capped at 75° because past ~80° the lower rim corner sinks
-  // below the bottle base in world y, and our 2-D world-horizontal
-  // layer model starts placing liquid at the wrong end of the rotated
-  // glass (the discrete-stack rendering can't simulate liquid flowing
-  // toward the spout once the bottle is past horizontal). 75° still
-  // looks dramatic and matches the user-perceived "tilt-and-pour" of a
-  // near-empty cup, while keeping the layer rendering coherent.
+  // pour. Allowed to reach the table's full 100° on the last layer (no
+  // artificial cap) — drawJuiceLayersWorld now uses a rotated-floor
+  // anchor model that places liquid correctly even past horizontal.
   const srcCap = src.capacity || CAPACITY;
-  const tiltDeg = Math.min(75, getPourTiltDeg(src.fillLevel, srcCap));
+  const tiltDeg = getPourTiltDeg(src.fillLevel, srcCap);
   const tiltAngle = sign * tiltDeg * Math.PI / 180;
   const cosA = Math.cos(tiltAngle);
   const sinA = Math.sin(tiltAngle);
@@ -960,7 +961,7 @@ function executePour(src, dst) {
       // corner keeps landing at the same spout point even as the
       // bottle's main body shifts to accommodate the steeper tilt.
       const newFill = src.fillLevel - 1;
-      const newTiltDeg = Math.min(75, getPourTiltDeg(newFill, srcCap));
+      const newTiltDeg = getPourTiltDeg(newFill, srcCap);
       const newTiltAngle = sign * newTiltDeg * Math.PI / 180;
       const newCos = Math.cos(newTiltAngle);
       const newSin = Math.sin(newTiltAngle);
@@ -1557,61 +1558,61 @@ function drawJuiceLayersWorld(b) {
   // fill covers that rotated-floor wedge instead of leaving it empty.
   // Higher runs are NOT extended — they would overlap the run below.
   //
-  // TILT Y-COMPRESSION (also specific to this playable). Physically,
-  // the world-horizontal liquid surface in a tilted cup can never sit
-  // higher than the LOWER rim corner — anything above that would be
-  // spilling out of the opening. After rotating around the bottle
-  // base by `b.angle`, the rim corners settle at:
-  //   lowerRimY = interior.t · cosθ + interior.r · |sinθ|   ← spout
-  //   upperRimY = interior.t · cosθ − interior.r · |sinθ|   ← raised side
-  // (canvas y is positive-down, so `lowerRimY` is the LARGER number =
-  // visually lower = the spill point on the side you're pouring out
-  // of). The natural full-stack surface (interior.t) sits ABOVE
-  // lowerRimY in world space, so EVERY layer interface stacked above
-  // lowerRimY gets clipped by the rotated rim — visually the top
-  // layers of a tilted full multi-colour bottle DISAPPEAR (the top
-  // pink unit on top of three other units shows nothing, just the
-  // bottom layers). Magic Sort's reference handles this by scaling
-  // the liquid sprite's width (`e.scale.x = Math.max(g, A)` keyed off
-  // distance to the rim anchor) so each liquid layer fits the tilted
-  // glass; the equivalent in our 2-D Canvas pipeline is to COMPRESS
-  // the per-unit layer height so the whole stack settles between
-  // interior.b (floor) and lowerRimY (spout / spill threshold).
-  // Single scale factor, clamped to a sensible minimum so edge-case
-  // tilts don't collapse layers to nothing:
-  //   tiltScale = (interior.b − lowerRimY) / (interior.b − naturalTop)
-  // Partial fills whose natural surface already sits below lowerRimY
-  // (smaller y / higher) yield > 1 from the formula → no compression
-  // (the `if (naturalTop < lowerRimY)` guard skips them entirely).
-  // Result: a tilted full bottle's surface anchors at the lower rim
-  // corner (the physically correct max), and a 4-layer stack squashes
-  // to ~35 % of upright height so every layer (including the 1-unit
-  // pink on top) sits clearly below the spout.
-  let tiltScale = 1;
-  if (Math.abs(b.angle) > 0.005 && b.fillLevel > 0) {
-    const cosA = Math.cos(b.angle), sinA = Math.sin(b.angle);
-    const lowerRimY = interior.t * cosA + interior.r * Math.abs(sinA);
-    const naturalTop = interior.b - b.fillLevel * LAYER_PX;
-    if (naturalTop < lowerRimY) {
-      const stackPx = interior.b - lowerRimY;          // available room above floor
-      const naturalStackPx = interior.b - naturalTop;  // what we'd want without tilt
-      tiltScale = Math.max(0.3, stackPx / naturalStackPx);
-    }
+  // STACK-ANCHORED-TO-ROTATED-FLOOR MODEL
+  // The liquid lives in counter-rotated (world-aligned) frame — its surface
+  // is world-horizontal as gravity demands. To position layers so they sit
+  // at the actual gravity floor of the tilted bottle (not the upright-frame
+  // interior.b which becomes geometrically wrong as the bottle tilts), we
+  // anchor the stack to the LOWEST point of the rotated interior in canvas
+  // y: the pour-side floor corner (interior.r, interior.b) rotated by
+  // b.angle. The TOP of the stack is bounded by the LIP/RIM outer corner
+  // (interior.r, interior.t) rotated — past that the liquid would spill.
+  // For the straight juice cup, the lip corner == body rim corner (no neck
+  // narrowing), so both upper and lower bounds use interior.r as the
+  // x-extent. Stacking from stackBottomY upward (subtracting in canvas y)
+  // lets:
+  //   - Upright cups render as before (stackBottomY → interior.b at θ=0)
+  //   - Tilted cups place liquid at the spout/pour side, not floating
+  //     in the geometric middle of the rotated body
+  //   - Last-unit pours at near-100° tilt drain visually with the surface
+  //     pinned to the lower lip corner (which is what real liquid does)
+  // Replaces the older `lowerRimY` compression that mixed local and world
+  // Y coords and broke past ~79° tilt (where lowerRimY rose above
+  // interior.b in canvas y, producing negative tiltScale → 0.3 clamp →
+  // visually over-filled bottle at extreme angles).
+  const cosA = Math.cos(b.angle), sinA = Math.sin(b.angle);
+  const absSinA = Math.abs(sinA);
+  let stackBottomY = interior.b;
+  let stackTopMaxY = interior.t;
+  if (Math.abs(b.angle) > 0.005) {
+    stackBottomY = interior.r * absSinA + interior.b * cosA;
+    stackTopMaxY = interior.r * absSinA + interior.t * cosA;
   }
+  const availableStackPx = Math.max(0, stackBottomY - stackTopMaxY);
+  const naturalStackPx = b.fillLevel * LAYER_PX;
+  let tiltScale = 1;
+  if (naturalStackPx > 0 && naturalStackPx > availableStackPx) {
+    tiltScale = availableStackPx / naturalStackPx;
+  }
+  tiltScale = Math.max(0.05, tiltScale);
   const effLayerPx = LAYER_PX * tiltScale;
+  // Layer surface helpers — anchored at stackBottomY (rotated floor) when
+  // tilted, at interior.b (= stackBottomY at θ=0) when upright.
+  const yAt = (idx) => stackBottomY - idx * effLayerPx;
+  const yAtFill = (fill) => stackBottomY - fill * effLayerPx;
 
   // UPRIGHT RIM-STROKE CLAMP — only kicks in when the bottle isn't tilted
-  // (tiltScale already handles the tilted case by compressing layers between
-  // interior.b and lowerRimY). When upright + full, the natural surface y
-  // sits at interior.t, putting the dome's apex (~ry above interior.t) and
-  // slosh wave crests inside the glass rim ellipse stroke region drawn by
-  // drawGlassOverlay (90 % alpha white, lineWidth 2 around y = -h + w*0.14).
-  // The stroke crosses through the dome's middle, masking the curve into a
-  // flat-looking double-line. Clamp the surface y down so the dome's full
-  // height plus 1 px clearance fits below the rim stroke's bottom edge.
-  // Pass 1 topmost rect AND Pass 3 dome both use stackTopY so they move
-  // down together and keep their visual relationship.
-  let stackTopY = interior.b - b.fillLevel * effLayerPx;
+  // (the stack-anchored model handles the tilted case by compressing layers
+  // between stackBottomY and stackTopMaxY). When upright + full, the natural
+  // surface y sits at interior.t, putting the dome's apex (~ry above
+  // interior.t) and slosh wave crests inside the glass rim ellipse stroke
+  // region drawn by drawGlassOverlay (90 % alpha white, lineWidth 2 around
+  // y = -h + w*0.14). The stroke crosses through the dome's middle, masking
+  // the curve into a flat-looking double-line. Clamp the surface y down so
+  // the dome's full height plus 1 px clearance fits below the rim stroke's
+  // bottom edge. Pass 1 topmost rect AND Pass 3 dome both use stackTopY so
+  // they move down together and keep their visual relationship.
+  let stackTopY = yAtFill(b.fillLevel);
   if (Math.abs(b.angle) < 0.005) {
     const rimStrokeBottomY = -b.h + b.w * 0.14 + 1;
     const minSurfaceY = rimStrokeBottomY + ry + 1;
@@ -1624,8 +1625,8 @@ function drawJuiceLayersWorld(b) {
     const isTop = (ri === runs.length - 1);
     const isBottom = (ri === 0);
 
-    const baseY = interior.b - run.fromIdx * effLayerPx;
-    const topSolidY = interior.b - run.toIdx * effLayerPx;
+    const baseY = yAt(run.fromIdx);
+    const topSolidY = yAt(run.toIdx);
     const topY = isTop ? stackTopY : topSolidY;
     const visH = baseY - topY;
     if (visH <= 0.5) continue;
@@ -1688,15 +1689,15 @@ function drawJuiceLayersWorld(b) {
     const thisRun = runs[ri];
     const nextRun = runs[ri + 1];
     const upperJuice = JUICE[nextRun.color];
-    const interfaceY = interior.b - thisRun.toIdx * effLayerPx;
+    const interfaceY = yAt(thisRun.toIdx);
 
     // Skip the ellipse when the upper run is still practically empty
     // (very early in the pour tween) — avoids a flash of upper color
     // before the actual rect is visible.
     const isUpperTop = (ri + 1 === runs.length - 1);
-    const upperHeight = isUpperTop
-      ? (b.fillLevel - nextRun.fromIdx) * effLayerPx
-      : (nextRun.toIdx - nextRun.fromIdx) * effLayerPx;
+    const upperBotY = yAt(nextRun.fromIdx);
+    const upperTopY = isUpperTop ? yAtFill(b.fillLevel) : yAt(nextRun.toIdx);
+    const upperHeight = upperBotY - upperTopY;
     if (upperHeight < 1) continue;
 
     drawInterfaceEllipse(interfaceY, rx, ry, upperJuice);
@@ -1721,17 +1722,30 @@ function drawJuiceLayersWorld(b) {
   // through the lowest juice layer. Top half of an ellipse in the darker
   // shade of that juice, positioned at interior.b so it protrudes UP into
   // the bottom rect area and gives the base a curved (not flat) appearance.
-  const bottomRun = runs[0];
-  const bottomJuice = JUICE[bottomRun.color];
-  const baseG = ctx.createRadialGradient(0, interior.b - ry * 0.35, rx * 0.08, 0, interior.b, rx);
-  baseG.addColorStop(0, bottomJuice.mid);
-  baseG.addColorStop(0.7, bottomJuice.bot);
-  baseG.addColorStop(1, bottomJuice.bot);
-  ctx.fillStyle = baseG;
-  ctx.beginPath();
-  ctx.ellipse(0, interior.b, rx, ry, 0, Math.PI, 2 * Math.PI);
-  ctx.closePath();
-  ctx.fill();
+  // Faded out during tilt: the ellipse is drawn in counter-rotated frame
+  // at local y=interior.b, but with the stack-anchored model the actual
+  // rect bottom shifts to stackBottomY (the rotated floor) when tilted —
+  // leaving the base ellipse floating ABOVE the liquid as a stray dark
+  // wedge near the cup's rim ("a cut at the top of the cup"). Smooth
+  // fade between 0.05 rad and 0.25 rad of tilt so the transition is
+  // invisible.
+  const tiltFade = 1 - Math.min(1, Math.max(0, Math.abs(b.angle) - 0.05) / 0.20);
+  if (tiltFade > 0.01) {
+    const bottomRun = runs[0];
+    const bottomJuice = JUICE[bottomRun.color];
+    const baseG = ctx.createRadialGradient(0, interior.b - ry * 0.35, rx * 0.08, 0, interior.b, rx);
+    baseG.addColorStop(0, bottomJuice.mid);
+    baseG.addColorStop(0.7, bottomJuice.bot);
+    baseG.addColorStop(1, bottomJuice.bot);
+    ctx.save();
+    ctx.globalAlpha = tiltFade;
+    ctx.fillStyle = baseG;
+    ctx.beginPath();
+    ctx.ellipse(0, interior.b, rx, ry, 0, Math.PI, 2 * Math.PI);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
 }
 
 function drawLayerMeniscus(y, rx, ry, juice) {

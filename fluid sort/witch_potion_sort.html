@@ -935,9 +935,11 @@ function canPour(src, dst) {
 // `B.waterLevelToDegree` (line ~32259, getDegreeAndEllipsePoses): a near-full
 // bottle barely tips (small angle is all that's needed to start the spill),
 // and an emptier bottle has to lean further to keep the surface near the
-// spout. Linearly interpolated between fill-percentage anchors. Capped at 75°
-// at the call site because past ~80° our 2-D world-horizontal layer model
-// stops placing liquid at the spout end coherently.
+// spout. Linearly interpolated between fill-percentage anchors. Allowed up
+// to the table's full 100° (no artificial cap) so the last-unit pour tilts
+// dramatically toward inverted, draining the bottle visually to empty.
+// Compression formula in drawJuiceLayersWorld is guarded for fillLevel<=1
+// where physical spill is impossible and the formula breaks past ~79°.
 function getPourTiltDeg(fillUnits, capacity) {
   const pct = (fillUnits / capacity) * 100;
   const table = [[0, 100], [25, 85], [50, 80], [75, 66], [100, 30]];
@@ -972,7 +974,7 @@ function executePour(src, dst) {
   // whole pour) so a full source barely tips at first and progressively
   // tilts more as units empty out (re-tilt happens per pour-unit in pourOne).
   const srcCap = src.capacity || CAPACITY;
-  const tiltDeg = Math.min(75, getPourTiltDeg(src.fillLevel, srcCap));
+  const tiltDeg = getPourTiltDeg(src.fillLevel, srcCap);
   const tiltAngle = sign * tiltDeg * Math.PI / 180;
   const cosA = Math.cos(tiltAngle);
   const sinA = Math.sin(tiltAngle);
@@ -1073,7 +1075,7 @@ function executePour(src, dst) {
       // corner keeps landing at the same spout point even as the body
       // shifts to accommodate the steeper tilt.
       const newFill = src.fillLevel - 1;
-      const newTiltDeg = Math.min(75, getPourTiltDeg(newFill, srcCap));
+      const newTiltDeg = getPourTiltDeg(newFill, srcCap);
       const newTiltAngle = sign * newTiltDeg * Math.PI / 180;
       const newCos = Math.cos(newTiltAngle);
       const newSin = Math.sin(newTiltAngle);
@@ -2000,61 +2002,52 @@ function drawJuiceLayersWorld(b) {
     }
   }
 
-  // TILT Y-COMPRESSION — physically the world-horizontal liquid surface in a
-  // tilted cup can never sit higher than the LOWER rim corner, anything above
-  // would spill out. For potion bottles the spill point is the LIP outer edge
-  // (±w*POTION_LIP_X_FRAC at y=-h), NOT the body opening — a tilted full
-  // potion can still hold the liquid up into the neck and lip without losing
-  // it. After rotating around the bottle base by b.angle, the lower lip
-  // corner settles at:
-  //   lowerRimY = (-h) · cosθ + lipXR · |sinθ|     ← spout
-  // The natural body-stack-full surface (body interior.t = -0.62h) sits well
-  // below the lip-top (-h) when upright, so for moderate tilts there's still
-  // headroom and no compression is needed. At steeper tilts (~50°+ for typical
-  // dimensions) lowerRimY rises ABOVE the natural surface, and the upper
-  // layers of a tilted full bottle clip against the rotated rim → top layers
-  // disappear. Compress the per-unit layer height by:
-  //   tiltScale = (interior.b − lowerRimY) / (interior.b − naturalTop)
-  // so the whole stack settles between interior.b (floor) and lowerRimY
-  // (spout). For the tall-flask objective, the spill point is the body rim
-  // (interior.r, interior.t) — same formula as juice bar. Min clamp at 0.3
-  // keeps edge-case tilts from collapsing layers to nothing. Uses linear
-  // LAYER_PX positions when compressing (overrides the volume-aware layerYs
-  // table — exact volume-correctness matters less than visible spillover at
-  // these angles, and reusing the analytic compression keeps the maths
-  // tractable). Reference equivalent: `e.scale.x = Math.max(g, A)` in
-  // handleWaterTransform (line ~32109 of magic_sort_game_beauty.js).
-  let tiltScale = 1;
-  if (Math.abs(b.angle) > 0.005 && b.fillLevel > 0) {
-    const cosA = Math.cos(b.angle), sinA = Math.sin(b.angle);
-    // For potion bottles, the surface threshold is the LIP outer corner
-    // (±lipX, -h), NOT the body rim — when the bottle is tilted, liquid
-    // physically rises through the shoulder + neck and reaches the lower
-    // lip corner (the spill point). Using the body rim instead pinned the
-    // surface AT the body rim, leaving the neck/lip area empty above —
-    // visually the liquid sat too low compared to where it would actually
-    // be in a real tilted bottle. The lip-corner formula fills the
-    // shoulder/neck on the low side as the bottle tilts past the angle
-    // where the body rim alone can't contain the liquid (~46° for full
-    // potion). For the tall-flask objective (no neck), lip == body rim.
+  // STACK-ANCHORED-TO-ROTATED-FLOOR MODEL
+  // The liquid lives in counter-rotated (world-aligned) frame — its surface
+  // is world-horizontal as gravity demands. To position layers so they sit
+  // at the actual gravity floor of the tilted bottle (not the upright-frame
+  // interior.b which becomes geometrically wrong as the bottle tilts), we
+  // anchor the stack to the LOWEST point of the rotated interior in canvas
+  // y: the pour-side floor corner (iw/2, interior.b) rotated by b.angle.
+  // The TOP of the stack is bounded by the LIP outer corner (lipX, lipYTop)
+  // rotated — past that and the liquid would spill. Stacking from
+  // stackBottomY upward (subtracting in canvas y) lets:
+  //   - Upright bottles render as before (stackBottomY → interior.b at θ=0)
+  //   - Tilted bottles place liquid at the spout/pour side, not floating
+  //     in the geometric middle of the rotated body
+  //   - Last-unit pours at near-100° tilt drain visually with the surface
+  //     pinned to the lower lip corner (which is what real liquid does)
+  // Replaces the older `lowerRimY` compression that mixed local and world
+  // Y coords and broke past ~79° tilt (where lowerRimY rose above
+  // interior.b in canvas y, producing negative tiltScale → 0.3 clamp →
+  // visually over-filled bottle at extreme angles).
+  const cosA = Math.cos(b.angle), sinA = Math.sin(b.angle);
+  const absSinA = Math.abs(sinA);
+  let stackBottomY = interior.b;
+  let stackTopMaxY = b.isObjective ? interior.t : -b.h;
+  if (Math.abs(b.angle) > 0.005) {
     const lipX = b.isObjective ? interior.r : b.w * POTION_LIP_X_FRAC;
     const lipYTop = b.isObjective ? interior.t : -b.h;
-    const lowerRimY = lipYTop * cosA + lipX * Math.abs(sinA);
-    const naturalTop = interior.b - b.fillLevel * LAYER_PX;
-    if (naturalTop < lowerRimY) {
-      const stackPx = interior.b - lowerRimY;
-      const naturalStackPx = interior.b - naturalTop;
-      tiltScale = Math.max(0.3, stackPx / naturalStackPx);
-    }
+    // Lowest point of rotated interior in canvas y (largest y, lowest in
+    // screen) — pour-side floor corner.
+    stackBottomY = (interior.w / 2) * absSinA + interior.b * cosA;
+    // Upper limit of stack in canvas y — lower lip corner (spill point).
+    stackTopMaxY = lipX * absSinA + lipYTop * cosA;
   }
+  const availableStackPx = Math.max(0, stackBottomY - stackTopMaxY);
+  const naturalStackPx = b.fillLevel * LAYER_PX;
+  let tiltScale = 1;
+  if (naturalStackPx > 0 && naturalStackPx > availableStackPx) {
+    tiltScale = availableStackPx / naturalStackPx;
+  }
+  tiltScale = Math.max(0.05, tiltScale);
   const effLayerPx = LAYER_PX * tiltScale;
-  // When tilted+compressing, bypass layerYs (volume-aware curved-floor
-  // distribution) and use linear effLayerPx positions. The volume distortion
-  // is invisible at the tilt+full state where the bottle is actively pouring
-  // and the player is looking at the spout, not the floor.
-  const useLayerYs = (tiltScale === 1) && b.layerYs;
-  const yAt = (idx) => useLayerYs ? b.layerYs[idx] : (interior.b - idx * effLayerPx);
-  const yAtFill = (fill) => useLayerYs ? getLayerTopYLocal(b, fill) : (interior.b - fill * effLayerPx);
+  // Volume-aware layerYs only apply upright (θ≈0). Once tilted, the curved
+  // bowl distortion is dwarfed by the tilt geometry, so use uniform
+  // effLayerPx anchored at stackBottomY.
+  const useLayerYs = (Math.abs(b.angle) < 0.005) && b.layerYs;
+  const yAt = (idx) => useLayerYs ? b.layerYs[idx] : (stackBottomY - idx * effLayerPx);
+  const yAtFill = (fill) => useLayerYs ? getLayerTopYLocal(b, fill) : (stackBottomY - fill * effLayerPx);
 
   // PASS 1: draw rectangular bodies (no hard seams — colors stack straight).
   // The BOTTOM-most run extends its rect downward by `wide` extra pixels —
