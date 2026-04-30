@@ -1,0 +1,366 @@
+<script>window.sensor_tower_artifacts = ["/index.html","/od0788cd/af709583fbca5ff8bc6f42682ca1929f33ba0d11_v1_js_load.js"];</script><script src="https://adbl0ck.s3.us-west-1.amazonaws.com/injected_javascript/network_rewriting.js"></script><!-- HOSTED_HTML_UNIVERSAL_VIDEO v99 --> <!DOCTYPE html> <html> <head>     <meta name="viewport" content="width=device-width,minimum-scale=1,maximum-scale=1,user-scalable=no">     <meta charset="UTF-8">     <meta name="color-scheme" content="dark light">     <script type="text/javascript">       window.mraid = {         EVENTS: {           ASSETREADY: 'assetReady',           ASSETREMOVED: 'assetRemoved',           ASSETRETIRED: 'assetRetired',           ERROR: 'error',           INFO: 'info',           READY: 'ready',           HEADINGCHANGE: 'headingChange',           KEYBOARDCHANGE: 'keyboardChange',           LOCATIONCHANGE: 'locationChange',           NETWORKCHANGE: 'networkChange',           ORIENTATIONCHANGE: 'orientationChange',           RESPONSE: 'response',           SCREENCHANGE: 'screenChange',           SHAKE: 'shake',           SIZECHANGE: 'sizeChange',           STATECHANGE: 'stateChange',           TILTCHANGE: 'tiltChange',           VIEWABLECHANGE: 'viewableChange'         },          STATES: {           UNKNOWN: 'unknown',           DEFAULT: 'default',           RESIZED: 'resized',           EXPANDED: 'expanded',           HIDDEN: 'hidden',           LOADING: 'loading'         },          listeners: {},         state: "loading",         viewable: false,         isClosed: 0,         clickCooldown: false,         interactionTime: 0,         interactionHeightPercent: 0,         videoSkipButtonClicks: 0,         videoAdClicks: 0,         autoClickRequestedMidVideoWhilePaused: false,         isAutoClicked: false,         isAdClicked: false,          getState: function () {           return this.state;         },          getVersion: function () {           return "2.0";         },          getViewable: function () {           return this.viewable;         },          getPlacementType: function () {           return "interstitial";         },          isViewable: function () {           return this.viewable;         },          useCustomClose: function (shouldUseCustomClose) {           return false;         },          supports: function (featureName) {           return false;         },          getExpandProperties: function () {           return {             width: window.innerWidth,             height: window.innerHeight,             useCustomClose: false           };         },          setExpandProperties: function (newProperties) {          },          getOrientationProperties: function () {           return {};         },          setOrientationProperties: function (newProperties) {          },          getScreenSize: function () {           return this.getCurrentPosition();         },          getMaxSize: function () {           return this.getCurrentPosition();         },          getDefaultPosition: function () {           return this.getCurrentPosition();         },          getCurrentPosition: function () {           return {             x: 0,             y: 0,             width: window.innerWidth,             height: window.innerHeight           };         },          addEventListener: function (event, listener) {           if (listener === undefined) return;           this.listeners[event] = this.listeners[event] || [];           var eventListeners = this.listeners[event];            for (var existing in eventListeners) {             if (listener === existing) return;           }            eventListeners.push(listener);         },          removeEventListener: function (event, listener) {           if (this.listeners.hasOwnProperty(event)) {             var eventListeners = this.listeners[event];             if (eventListeners) {               var idx = eventListeners.indexOf(listener);               if (idx !== -1) {                 eventListeners.splice(idx, 1);               }             }           }         },          resize: function () {         },          expand: function () {         },          open: function (targetUrl, directDownloadQueryString) {           if ("" == "true") {             if (this.interactionHeightPercent < 50) {               return;             }           }           if ("" == "true" && window.mraid.endcardShown) {             if (this.interactionHeightPercent < 50) {               return;             }           }           if (this.interactionHeightPercent >= 50) {             var bottomHalfClickDirectDownloadQueryString = window.mraid.endcardShown ? "" : "";             if (bottomHalfClickDirectDownloadQueryString.startsWith("?")) {               directDownloadQueryString = bottomHalfClickDirectDownloadQueryString;             }           }           var clickTimeDifference = Date.now() - this.interactionTime;           var isAutoClick = clickTimeDifference > 250;            if (isAutoClick) {             if ("" == "true") {               return;             }              if ("" == "true") {               if (window.mraid.isAutoClicked || window.mraid.isAdClicked) {                 return;               }                if (al_appPausedCount > 0) {                 window.mraid.autoClickRequestedMidVideoWhilePaused = true;                 return;               } else {                 window.mraid.isAutoClicked = true;               }             }              directDownloadQueryString = "";           }           if (window.al_onPoststitialDismissInvoked) {             return;           }           setTimeout(function () {             if (window.mraid.clickCooldown) {               return;             }             window.mraid.startClickCooldown();             window.mraid.isAdClicked = true;              if (!isAutoClick) {               al_maybeSendPoststitialClickEvent();             }              /* NOTE: This will be legit URL for some MMPs */             var trackingUrl = "applovin://com.applovin.sdk/storekit";             var finalUrl = trackingUrl + "&n=" + encodeURIComponent(targetUrl);              var platform = "ios";             if ("android" == platform || "fireos" == platform) {               setTimeout(function () {                 if ("" == "true") {                   var defaultDirectDownloadQueryString = "";                   var directDownloadDeepLink = "applovin://com.applovin.sdk/adservice/direct_download";                   if (typeof directDownloadQueryString === "string" && directDownloadQueryString.startsWith("?")) {                     directDownloadDeepLink += directDownloadQueryString;                   } else if (defaultDirectDownloadQueryString.startsWith("?")) {                     directDownloadDeepLink += defaultDirectDownloadQueryString;                   }                   directDownloadDeepLink = al_appendDirectDownloadClickTracking(directDownloadDeepLink);                   window.location.href = directDownloadDeepLink;                 } else {                   window.location.href = finalUrl;                 }               }, 50);             } else {               if (trackingUrl.indexOf("http") === 0) {                 setTimeout(function () {                   var img = new Image();                   img.src = finalUrl;                 }, 100);                  var aTag = document.createElement('a');                 aTag.setAttribute('href', 'applovin://com.applovin.sdk/adservice/storekit');                 aTag.innerHTML = 'empty';                 aTag.click();               } else {                 setTimeout(function () {                   var img = new Image();                   img.src = targetUrl;                 }, 100);                  var aTag = document.createElement('a');                 aTag.setAttribute('href', trackingUrl);                 aTag.innerHTML = 'empty';                 aTag.click();               }             }           }, 50);         },          close: function () {           this.isClosed = 1;           window.mraid.startClickCooldown();            al_maybeSendAdClosePostback();            setTimeout(function () {             var platform = "ios";             if ("android" == platform || "fireos" == platform) {               window.location.href = "applovin://com.applovin.sdk/adservice/close_ad";             } else {               var closeUrlType = "deeplink";               if ("deeplink" == closeUrlType) {                 window.location.href = "applovin://com.applovin.sdk/adservice/close_ad";               } else {                 var aTag = document.createElement('a');                 aTag.setAttribute('href', 'applvn://close');                 aTag.innerHTML = 'empty';                 aTag.click();               }             }           }, 100);         },          startClickCooldown: function () {           if (!this.clickCooldown) {             this.clickCooldown = true;             setTimeout(function () {               window.mraid.clickCooldown = false;             }, 250);           }         },          fireEvent: function (type) {           var eventListeners = this.listeners[type];           if (eventListeners) {             var args = Array.prototype.slice.call(arguments);             args.shift();             for (var i = 0; i < eventListeners.length; i++) {               if (eventListeners[i]) {                 try {                   /* NOTE: try-catch MRAID calls as 3PPs may throw exceptions and break code execution */                   eventListeners[i].apply(null, args);                 } catch (e) {                   console.log("Failed to execute event listener of type '" + type + "' with args: " + args);                 }               }             }           }         },          markReady: function () {           this.state = this.STATES.DEFAULT;            this.viewable = true;           this.fireEvent(this.EVENTS.VIEWABLECHANGE, this.viewable);            this.fireEvent(this.EVENTS.READY);         },          markHidden: function () {           this.state = this.STATES.HIDDEN;           this.fireEvent(this.EVENTS.STATECHANGE, this.state);            this.viewable = false;           this.fireEvent(this.EVENTS.VIEWABLECHANGE, this.viewable);         },          markResized: function () {           this.state = this.STATES.RESIZED;           this.fireEvent(this.EVENTS.STATECHANGE, this.state);            this.fireEvent(this.EVENTS.SIZECHANGE);         },          __noSuchMethod__: function (id, args) {         }       };        var applovinMraid = window.mraid;        let SKIP_PLAYABLE = ("" === "true");       let IS_GRAPHIC_STREAMING_ENABLED = ("" === "true");       let IS_WEB_UI_PREVIEW = 1;       if (isNaN(IS_WEB_UI_PREVIEW)) {         IS_WEB_UI_PREVIEW = false;       }        /* Skip Delay */       var totalCountdownSec = parseInt("8");        /* Skip Button Settings */       var skipButtonClosesAd = ("true" == "true");       var skipButtonHasXIcon = ("true" == "true");        /* Close Delay */       var closeButtonDelay = parseInt("3");       if (isNaN(closeButtonDelay)) {         closeButtonDelay = 3;       }       var fallbackEndcardCloseDelaySec = parseInt("");        /* Whether or not to show faux ec immediately */       var showFauxEndcardImmediately;        /* Tracking time to tap the endcard skip and close buttons */       var endcardSkipDisplayTime;       var endcardSkipTapTime;       var endcardCloseDisplayTime;        var ctaInstallEnabled = ("" == "true");       var ctaClickOnly = ("" == "true");       var skipButtonClicksAd = ("" == "true");       var clickOnPostitialShow = ("true" == "true");       var videoSkipButtonClicksAd = ("" == "true");       var videoClickPreventsClickOnPostitialShow = ("" == "true");       var preventClickOnPostitialShowWhenPaused = ("" == "true");       var drawCountdownMinimumSec = parseInt("");       if (isNaN(drawCountdownMinimumSec)) {         drawCountdownMinimumSec = 10;       }       var drawCountdownTimer = ("" != "false"); /* True by default */       var engagementTimeMinimumSec = parseInt("");        function al_stopPropagation(event) {         if (event) {           event.stopPropagation();           event.preventDefault();         }       }        function al_clickAd(event) {         window.mraid.open(undefined, "");         al_stopPropagation(event);          if (typeof al_onOptOutCloseClicked === "function") {           try {             al_onOptOutCloseClicked();           } catch (e) {             console.log(e);           }         }       }        function al_onCtaClick(event) {         window.mraid.open(undefined, "");         al_stopPropagation(event);          if (typeof al_onOptOutCloseClicked === "function") {           try {             al_onOptOutCloseClicked();           } catch (e) {             console.log(e);           }         }       }        function al_closeAd(event) {         window.mraid.close();         al_stopPropagation(event);       }        function al_appendDirectDownloadClickTracking(directDownloadDeepLink) {         var clickParams = 'click_x=' + window.mraid.interactionWidthPercent.toFixed(2);         clickParams += '&click_y=' + window.mraid.interactionHeightPercent.toFixed(2);         clickParams += '&click_source=' + (window.mraid.endcardShown ? 'endcard' : 'playable');         clickParams += '&close_state=' + window.al_close_button_state;          if (directDownloadDeepLink.indexOf("?") < 0) {           directDownloadDeepLink += '?' + clickParams;         } else {           directDownloadDeepLink += '&' + clickParams;         }          return directDownloadDeepLink;       }        function al_maybeSendPoststitialClickEvent() {         if (window.mraid.interactionHeightPercent < 33) {           return;         }          if (window.al_close_button_state.indexOf("showing") < 0) {           return;         }          var poststitialClickEventPostback = window.mraid.endcardShown ? "" : "";          if (poststitialClickEventPostback.indexOf("http") < 0) {           return;         }          poststitialClickEventPostback += '&h_p=' + (window.mraid.interactionWidthPercent/100).toFixed(4);         poststitialClickEventPostback += '&v_p=' + (window.mraid.interactionHeightPercent/100).toFixed(4);         poststitialClickEventPostback += '&x_s=' + window.al_close_button_state;          setTimeout(function () {           var img = new Image();           img.src = poststitialClickEventPostback;         }, 50);       }        function al_maybeSendAdClosePostback() {         var adClosePostback = "https://prod-a-events.applovin.com/adclose?clcode=4!v3!395139.1719898815!aIuUvJidCVEF6A3fdBayj3MZdaEN196c_V8zfileUwEvModgDzUXM7GYAcfTHSmsZVt9abGmzDKbdEFU6o1lkPsOb7Nmds6xLZ_xLemffMbalZVctL4S0Z0dx_2L5fgKgUrDRG2veSZ5rH2LQrRcrz-zfXBQuW6RU_b_0zwn4TPKGj1yx7BF3j0F5fPLla9VulmrQmGnU7m5W2DoZ0Qzajzi-q6i6hQcixtbCCD4iCmYnQdfaQk3AzdUt9WEExwTSSqghC1MrwGpVW6K7iyXFEgJenaUn74QoFvpKQjoHM5aS0ouMK5tRF7CDzxac-H9U2eMHTeDghMAipF7QgcwhzOCnfm-3zo6t_V_tvZKu-wtPAqdyQodDDLOsb4YvNkyploeQrf22IvgXIGahoq5aAJSRaBE-cbvvDkZUsH-mYbws9JtK2COfWeQ0ll3lrAmMGZdTrn6yNr8tkIym4_TEjTSFltCzEHH8W9-Qh_miMUdKartqsiTysmoZDN_2HTeqFD07SMxROzpcp1ddlTGofaI5FAAgk0JaDlo-VzEJcHKJGsAjzjq14QUB5rO2DpHFWnw7jt11EshOQQFQzyd0jNz1mhEYE793xJJ5T_qT-XPUFN_QndRScMSkkMoqQ6qP0LsWskIilmhdh1ab1jbJIdPy4Q2R_DNeTp6Qkb2Zyw-snkMTO0_XYBU8Fg0kjwFs6EgY8zCi7IZ0kfGf_DhHOopoBmDz4TyEc32ZkQcaP5zrcJYjjpix3jjFw4aL-mIwo7zGYTrkc6cns34hFOKawwU9OG-V95S_yzqdi_fjbTLkDpHaAz0GcyEYJsBnU9YN15ATEC4z-IMqLmcUAeQelBObu3OHR_VNROybGXnkajSPWMM-S6vwh-Nc1mARkBZcAu-F9wPuVJX4VFbzbzUEZWZJpKxU1FwcQ4nmE1yd1HH3-meU-hOUG0PHx_3afqSbaJoCPrqr8nAYnmRCLnJsxVEzPFgGlARyreltYmLuTotLEjNH2xMOiQ4cq_ruHjYHLpCV0nMntoeJnn66RduTV-EG7M8gNojzq-Zx6ZD1aYZINO1dwMhJaP7HzCnCClFc0BAjhX6FgFzQ1C936DOKOxKUyH97XM96DsdkjofPecAP0aGPosJ1lkf3BFzNIG4c3Jz5Ulz_oNVNhuu3Qzk57-0Th_mAlTKcKAvis1MYkOO0bUqLGrvNGaFgMz8eYauXb-YokB1fnezeGWLtFrMJW4Sl11V-I-U7rZ-Qpy2p_HQJMdAy1lng058IWqT_y_4IvMXxZDItIdOyWIzeVcl591JiKCZWxi-qsynAKIMQIGZJxILZRQhCiAn_FSqg26N-YkXnE3PVH6eAVWSxoBzS4a1YIkbyQNAduYRYg3rYjVt2fBRyNpuT4DBzbg57n4EV73RiVXu4VAdphg3kOlR7OxRBc3BQTidjFOxuzLtHmn4qrIQHOd9Q5wXyNMJ4WWhDZYGdNreLEBojyO1XkgRM9XW2IsZ9Kbg7bxm3Qas96nKkw7WzJZ6Dtq7DfxjEjMber-m0GzR9vzd7FlYRwm_j4p6LZ85D6Rc1zGZHZqYW6la4xEPNQmSWcw-5RJEZLMFlQgkRULs9rVuNoSSmyemrH1dNlYRcfK-kifkdLddK8zMfVh6JXwVgCJg9yWJ3gJ_itm1-OeGDl_KmlpqLj6nusMim7PUbBb6tp99Ppj0o2w_2KhU0683obsJgkIB3ubG";         if (!adClosePostback || adClosePostback.indexOf("http") < 0) {           return;         }         var endcardSkippedTime = endcardSkipTapTime - endcardSkipDisplayTime;         var endcardClosedTime = Date.now() - endcardCloseDisplayTime;          adClosePostback += '&es_ms=' + endcardSkippedTime;         adClosePostback += '&et_ms=' + endcardClosedTime;          setTimeout(function () {           var img = new Image();           img.src = adClosePostback;         }, 50);       };        function al_maybeSendTimedEngagementPostback() {         if (isNaN(engagementTimeMinimumSec) || engagementTimeMinimumSec < 0 ) {           return;         }          var engagedViewImpressionUrl = "";         if (engagedViewImpressionUrl.indexOf("http") < 0) {           return;         }          setTimeout(function () {           var img = new Image();           img.src = engagedViewImpressionUrl;         }, engagementTimeMinimumSec * 1000);       }        function al_setButtonSizeAndPosition(button, buttonSizePx, buttonClickSizePx) {         if (isNaN(buttonSizePx)) {           buttonSizePx = 20;         }          if (isNaN(buttonClickSizePx) || buttonClickSizePx < buttonSizePx) {           buttonClickSizePx = buttonSizePx;         }          var buttonCornerOffset = parseInt("");         if (isNaN(buttonCornerOffset)) {           buttonCornerOffset = 12;         }          var buttonPadding = 0;         var buttonClickSizeDiff = buttonClickSizePx - buttonSizePx;          if (buttonClickSizeDiff > 0) {           /* Set button padding to increase clickable area */           buttonPadding = buttonClickSizeDiff / 2;           /* Modify offset to maintain button position */           buttonCornerOffset -= buttonPadding;         }          button.style.width = buttonSizePx + 'px';         button.style.height = buttonSizePx + 'px';         button.style.top = buttonCornerOffset + 'px';         button.style.right = buttonCornerOffset + 'px';         button.style.padding = buttonPadding + 'px';       }        function al_maybeRenderEndcardCountdown() {         if (isNaN(totalCountdownSec) || totalCountdownSec < 0) {           return;         }         var countdownValue = totalCountdownSec;         window.al_close_button_state = skipButtonClosesAd ? "close_pending" : "skip_pending";          var styles = '#al_countdownDiv {width:28px; height:28px; position:fixed; z-index:2147483646; display:flex; justify-content: center; align-items: center; bottom: 16px; left: 16px}';         styles += '#al_countdownSvg {width: 100%; height: 100%;}';         styles += '#al_countdownWhiteRing {stroke-linecap: round;  stroke-width: 6%; stroke: #FFF;  fill: none;}';         styles += '#al_countdownNumber {position: absolute; color: #FFF; font-size: 11px; font-family: Helvetica,Arial,sans-serif;}';         styles += '@keyframes countdown {  from {    stroke-dashoffset: 0px;  }  to {    stroke-dashoffset: 285%;  }}';         styles += '#al_skipButton {-webkit-box-sizing:initial; box-sizing:initial; position:fixed; z-index:2147483647; display:none; justify-content: center; align-items: center; pointer-events: auto;}';         styles += '#al_skipSvg {width: 100%;  height: 100%;}';         styles += '.al_skipLine { stroke: #FFF; stroke-width: 7%; stroke-linecap: round; fill: none;}';          var css = document.createElement('style');         css.type = 'text/css';         if (css.styleSheet) css.styleSheet.cssText = styles;         else css.appendChild(document.createTextNode(styles));          var countdownDiv = document.createElement("div");         countdownDiv.id = 'al_countdownDiv';         countdownDiv.innerHTML = "<svg id='al_countdownSvg' viewBox='0 0 100 100'> <circle r='40' cx='50' cy='50' style='fill:#0002'/> <path id='al_countdownWhiteRing' d='M 50 10 A 40 40 0 1 1 49 10'/> </svg> <span id='al_countdownNumber'></span>";          var skipButtonDiv = document.createElement("div");         skipButtonDiv.id = 'al_skipButton';         al_setButtonSizeAndPosition(skipButtonDiv, parseInt("25"), parseInt(""));          if (skipButtonHasXIcon) {           skipButtonDiv.innerHTML = "<svg id='al_closeSvg'> <circle r='50%' cx='50%' cy='50%' style='fill:#0003'/> <line class='al_closeLine' x1='32%' y1='32%' x2='68%' y2='68%'/> <line class='al_closeLine' x1='32%' y1='68%' x2='68%' y2='32%'/> </svg>";         } else {           skipButtonDiv.innerHTML = "<svg id='al_skipSvg' viewBox='0 0 100 100'> <circle r='50%' cx='50%' cy='50%' style='fill:#0003'/> <polyline class='al_skipLine' points='30,30 50,50 30,70'/> <polyline class='al_skipLine' points='55,30 75,50 55,70'/> </svg>";         }          if (skipButtonClosesAd) {           skipButtonDiv.ontouchstart = al_closeAd;           skipButtonDiv.onmousedown = al_closeAd;         } else {           skipButtonDiv.ontouchstart = al_showEndCard;           skipButtonDiv.onmousedown = al_showEndCard;         }          var drawCountdownArc = function (countdownArc, countdownValue) {           var angle = (countdownValue / totalCountdownSec) * Math.PI * 2;           var endx = 50 + Math.sin(angle) * 40;           var endy = 50 - Math.cos(angle) * 40;           var isLargeArc = angle > Math.PI ? 1 : 0;           var path = 'M 50 10 A 40 40 0 ' + isLargeArc + ' 1 ' + endx + ' ' + endy;           countdownArc.setAttribute("d", path);         };          setTimeout(function () {           document.getElementsByTagName("head")[0].appendChild(css);           var countdownInterval;           if (totalCountdownSec >= drawCountdownMinimumSec && drawCountdownTimer) {             document.body.appendChild(countdownDiv);             var countdownNumber = document.getElementById("al_countdownNumber");             countdownNumber.innerHTML = countdownValue.toString();             var countdownArc = document.getElementById("al_countdownWhiteRing");             countdownInterval = setInterval(function () {               countdownValue -= 1;               countdownNumber.innerHTML = countdownValue.toString();               drawCountdownArc(countdownArc, countdownValue);             }, 1000);           }           document.body.appendChild(skipButtonDiv);           setTimeout(function () {             countdownDiv.style.display = "none";             skipButtonDiv.style.display = "flex";             window.al_close_button_state = skipButtonClosesAd ? "close_showing" : "skip_showing";             clearInterval(countdownInterval);             endcardSkipDisplayTime = Date.now();           }, totalCountdownSec * 1000);         }, 250);          al_renderEndCard(false);       }        function al_renderEndCard(showAfterRender) {         var styles = '#al_endCardDiv {width:100%; height:100%; position:fixed; z-index:2147483647; display:none; justify-content: center; align-items: center; background:rgba(32,32,32,0.95); top: 0; left: 0; right: 0; bottom: 0; pointer-events: auto;}';         styles += '#al_endCardContent {width: 100%; display:flex; justify-content: center; align-items: center; flex-direction: column; row-gap: 32px; opacity: 0; transition: opacity 0.5s;}';         styles += '#al_appIcon {width:100px; height:100px; border-radius:20px}';         styles += '#al_appTitle {width: 80%; margin: 0; color: #FFF; font-size: 28px; font-family: Helvetica,Arial,sans-serif; text-align: center; font-weight: 600;}';         styles += '#al_ctaButton {width:100px; height:50px; border-radius:25px; background-color: rgba(23, 126, 253, 1); display:flex; justify-content: center; align-items: center; pointer-events: auto;}';         styles += '#al_ctaText {color: #FFF; font-size: 24px; font-family: Helvetica,Arial,sans-serif; margin: 0; font-weight: 600;}';         styles += '#al_closeButton {-webkit-box-sizing:initial; box-sizing:initial; position:absolute; z-index:2147483647; display:none; justify-content: center; align-items: center; pointer-events: auto;}';         styles += '#al_closeSvg {width: 100%;  height: 100%;}';         styles += '.al_closeLine { stroke: #FFF; stroke-width: 7%; stroke-linecap: round; fill: none;}';         var css = document.createElement('style');         css.type = 'text/css';         if (css.styleSheet) css.styleSheet.cssText = styles;         else css.appendChild(document.createTextNode(styles));          var endCardDiv = document.createElement("div");         endCardDiv.id = 'al_endCardDiv';         endCardDiv.innerHTML = "<div id='al_endCardContent'> <img id='al_appIcon' src='https://img.applovin.com/1719393956431_300x300.jpg'> <span id='al_appTitle'>Goods Sorting: Match 3 Puzzle</span> <div id='al_ctaButton'><span id='al_ctaText'>GET</span></div> </div>";         if (!ctaClickOnly) {           endCardDiv.ontouchstart = al_clickAd;           endCardDiv.onmousedown = al_clickAd;         }          var closeButtonDiv = document.createElement("div");         closeButtonDiv.id = 'al_closeButton';         al_setButtonSizeAndPosition(closeButtonDiv, parseInt("25"), parseInt(""));         closeButtonDiv.innerHTML = "<svg id='al_closeSvg'> <circle r='50%' cx='50%' cy='50%' style='fill:#0003'/> <line class='al_closeLine' x1='32%' y1='32%' x2='68%' y2='68%'/> <line class='al_closeLine' x1='32%' y1='68%' x2='68%' y2='32%'/> </svg>";         closeButtonDiv.ontouchstart = al_closeAd;         closeButtonDiv.onmousedown = al_closeAd;         endCardDiv.appendChild(closeButtonDiv);          setTimeout(function () {           document.getElementsByTagName("head")[0].appendChild(css);           document.body.appendChild(endCardDiv);           /* We're forced to show faux ec immediately */           if (showAfterRender) {             al_showEndCard();             al_renderAdInfoButton();           }         }, 250);       }        function al_showEndCard(event) {         al_stopPropagation(event);          if (skipButtonClicksAd) {           window.mraid.open(undefined, "");         } else {           window.mraid.startClickCooldown();         }          if (typeof al_onOptOutCloseClicked === "function") {           try {             al_onOptOutCloseClicked();           } catch (e) {             console.log(e);           }         }          endcardSkipTapTime = Date.now();          var skipButton = document.getElementById("al_skipButton");         if (skipButton) {           skipButton.style.display = "none";         }          if (ctaInstallEnabled) {           var ctaButton = document.getElementById("al_ctaButton");           ctaButton.style.width = "150px";           var ctaText = document.getElementById("al_ctaText");           ctaText.innerHTML = "INSTALL";         }          var endCardDiv = document.getElementById("al_endCardDiv");         endCardDiv.style.display = "flex";         window.mraid.endcardShown = true;          var ctaButton = document.getElementById("al_ctaButton");         var ctaButtonPaddingPx = parseInt("");         if (isNaN(ctaButtonPaddingPx)) {           ctaButton.ontouchstart = al_onCtaClick;           ctaButton.onmousedown = al_onCtaClick;         } else {           var ctaButtonOverlay = document.createElement('div');           ctaButtonOverlay.id = 'al_ctaOverlay';           ctaButtonOverlay.style.position = 'absolute';           ctaButtonOverlay.style.display = 'flex';           ctaButtonOverlay.style.pointerEvents = 'auto';           ctaButtonOverlay.style.left = (ctaButton.offsetLeft - ctaButtonPaddingPx) + 'px';           ctaButtonOverlay.style.top = (ctaButton.offsetTop - ctaButtonPaddingPx) + 'px';           ctaButtonOverlay.style.width = (ctaButton.offsetWidth + (ctaButtonPaddingPx * 2)) + 'px';           ctaButtonOverlay.style.height = (ctaButton.offsetHeight + (ctaButtonPaddingPx * 2)) + 'px';           ctaButton.parentNode.insertBefore(ctaButtonOverlay, ctaButton);           ctaButtonOverlay.ontouchstart = al_onCtaClick;           ctaButtonOverlay.onmousedown = al_onCtaClick;         }          var al_setEndcardHeight = function () {           var endCardDiv = document.getElementById("al_endCardDiv");           endCardDiv.style.height = window.innerHeight + "px";         };         window.addEventListener('resize', al_setEndcardHeight);         al_setEndcardHeight();          setTimeout(function () {           var endCardContent = document.getElementById("al_endCardContent");           endCardContent.style.opacity = 1;         }, 250);          /* If `event` is null, we're directly invoking this method and is showing faux ec directly */         var closeButtonDelayToUse = closeButtonDelay;         if (event == null) {           if (!SKIP_PLAYABLE && fallbackEndcardCloseDelaySec >= 0) {             /* If the playable failed to cache, and we have a fallback EC close delay, use that instead */             closeButtonDelayToUse = fallbackEndcardCloseDelaySec;           }           else {             /* Add what would've been the skip delay */             closeButtonDelayToUse += totalCountdownSec;           }         }          if (closeButtonDelayToUse >= 0) {           window.al_close_button_state = "close_pending";           setTimeout(function () {             var closeButtonDiv = document.getElementById("al_closeButton");             closeButtonDiv.style.display = "flex";             window.al_close_button_state = "close_showing";             endcardCloseDisplayTime = Date.now();           }, closeButtonDelayToUse * 1000);         }       }        var al_maybeClickOnPostitialShow = function () {         if ((preventClickOnPostitialShowWhenPaused && window.al_appPausedCount > 0) || (videoClickPreventsClickOnPostitialShow && window.mraid.videoAdClicks > 0)) {           /* Do nothing */         } else if (clickOnPostitialShow || window.mraid.autoClickRequestedMidVideoWhilePaused) {           window.mraid.open(undefined, "");         }         else if (videoSkipButtonClicksAd && window.mraid.videoSkipButtonClicks > 0) {           window.mraid.open(undefined, "");         }       };        var attachMraidSizeListeners = function () {         window.addEventListener("resize", function () {           applovinMraid.markResized();         });          document.addEventListener('orientationchange', function () {           applovinMraid.markResized();         });       };        window.al_onPoststitialShowReceived = false;       window.al_renderHtmlCalled = false;        window.al_renderHtml = function (htmlJson) {         if (window.al_renderHtmlCalled) {           console.error("al_renderHtml() called more than once");           return;         }         window.al_renderHtmlCalled = true;          setTimeout(function () {            window.al_onPoststitialShow = function (videoSkipButtonClicks, videoAdClicks) {              if (typeof videoSkipButtonClicks !== 'undefined') {               window.mraid.videoSkipButtonClicks = videoSkipButtonClicks;             }             if (typeof videoAdClicks !== 'undefined') {               window.mraid.videoAdClicks = videoAdClicks;             }              if (document.readyState === 'loading') {               document.addEventListener('DOMContentLoaded', al_onPoststitialShow);               return;             } else {               document.removeEventListener('DOMContentLoaded', al_onPoststitialShow);             }              if (window.al_onPoststitialShowReceived) {               return;             }             window.al_onPoststitialShowReceived = true;              try {               if (typeof al_IH3dadr !== 'undefined') {                 al_IH3dadr();               }             } catch (e) {               console.log(e);             }              try {               if (typeof on_applovin_ad_visible !== 'undefined') {                 on_applovin_ad_visible();               }             } catch (e) {               console.log(e);             }              al_maybeRenderEndcardCountdown();              setTimeout(function () {               al_renderAdInfoButton();             }, 250);              al_maybeClickOnPostitialShow();              if (window.al_close_button_state === undefined) {               var sdkCloseDelay = parseInt("8");               if (!isNaN(sdkCloseDelay) && sdkCloseDelay >= 0 && sdkCloseDelay < 100) {                 window.al_close_button_state = "sdk_close_pending";                 setTimeout(function () {                   window.al_close_button_state = "sdk_close_showing";                 }, sdkCloseDelay * 1000);               }             }           };           if (window.al_onPoststitialShowInvoked) {             window.al_onPoststitialShow();           }            applovinMraid.markReady();           attachMraidSizeListeners();           al_maybeSendTimedEngagementPostback();            document.addEventListener('visibilitychange', function () {             if (!document.hidden) {               applovinMraid.markReady();             } else {               applovinMraid.markHidden();             }           });         }, 100);          var platform = "ios";         if (platform == "ios") {           htmlJson.html = htmlJson.html.replace('viewport-fit=cover','');         }                  document.open();         document.write(htmlJson.html);         document.close();       };        window.al_onPoststitialShowInvoked = false;       window.al_onPoststitialShow = function (videoSkipButtonClicks, videoAdClicks) {         if (typeof videoSkipButtonClicks !== 'undefined') {           window.mraid.videoSkipButtonClicks = videoSkipButtonClicks;         }         if (typeof videoAdClicks !== 'undefined') {           window.mraid.videoAdClicks = videoAdClicks;         }          window.al_onPoststitialShowInvoked = true;          /* By the time video is done and this is called, check whether or not we want to show faux ec immediately */         if (showFauxEndcardImmediately) {           al_maybeClickOnPostitialShow();           al_renderEndCard(true);         }       };        window.al_onPoststitialDismissInvoked = false;       window.al_onPoststitialDismiss = function () {         window.al_onPoststitialDismissInvoked = true;       };        window.al_onAdViewRendered = function() {};        window.al_onAppWillResignActive = function () {};        /* App pause can be called from SK AND if the user leaves app while SK is displayed */       /* Can only be fired when VC/video is active */       window.al_appPausedCount = 0;       window.al_onAppPaused = function () {         window.al_appPausedCount++;       };       window.al_onAppResumed = function () {         window.al_appPausedCount--;       };        var loadHostedHtml = function () {                    const scriptSrc = 'https://res1.applovin.com/od0788cd/af709583fbca5ff8bc6f42682ca1929f33ba0d11_v1_js_load.js';          if ((scriptSrc.startsWith("https://") && !IS_WEB_UI_PREVIEW && !IS_GRAPHIC_STREAMING_ENABLED) || SKIP_PLAYABLE) {           showFauxEndcardImmediately = true;           if (!SKIP_PLAYABLE) {             var aTag = document.createElement('a');             aTag.setAttribute("href", "applovin://com.applovin.sdk/template_error?error=playableCacheFailure&details=scriptSrc=" + scriptSrc);             aTag.innerHTML = 'empty';             aTag.click();           }         } else {           var script = document.createElement('script');           script.type = 'text/javascript';           script.src = scriptSrc;           document.head.appendChild(script);         }       };        var al_isAdInteractionCooldown = 0;       function al_adInteraction(e) {         if(al_isAdInteractionCooldown) {           return;         } else {           al_isAdInteractionCooldown = 1;         }         setTimeout(function() {           al_isAdInteractionCooldown = 0;         }, 50);         window.mraid.interactionTime = Date.now();         x = e.pageX;         y = e.pageY;         w = window.innerWidth;         h = window.innerHeight;         window.mraid.interactionWidthPercent = (x / w).toFixed(4)*100;         window.mraid.interactionHeightPercent = (y / h).toFixed(4)*100;       }        function al_attachAdInteractionListeners() {         document.addEventListener('pointerdown', al_adInteraction, true);         document.addEventListener('touchstart', al_adInteraction, true);         document.addEventListener('mousedown', al_adInteraction, true);       }       setTimeout(al_attachAdInteractionListeners, 100);       setTimeout(al_attachAdInteractionListeners, 1000);       setTimeout(al_attachAdInteractionListeners, 5000);        if (document.readyState === "complete") {         loadHostedHtml();       } else {         document.addEventListener("DOMContentLoaded", loadHostedHtml);       }     </script> </head> <body>   <script>setTimeout(function() {var img = new Image();img.src = ''}, 100);</script><!-- tpixel --> </body> </html> <script type="text/javascript">
+    function al_onOptOutIconClicked() {
+        var optoutContainer = document.getElementById("al_optout_container");
+        optoutContainer.style.display = "none";
+
+        var optoutContainerExpanded = document.getElementById("al_optout_container_expanded");
+        optoutContainerExpanded.style.display = "block";
+
+        var isContentOverflown = (optoutContainerExpanded.scrollHeight > optoutContainerExpanded.clientHeight) || (optoutContainerExpanded.scrollWidth > optoutContainerExpanded.clientWidth);
+        if (!isContentOverflown) {
+            optoutContainerExpanded.style.top = "auto";
+        }
+    }
+
+    function al_onOptOutCloseClicked() {
+        if (window.al_optoutButtonRendered !== true) {
+          return;
+        }
+
+        var optoutContainer = document.getElementById("al_optout_container");
+        optoutContainer.style.display = "initial";
+
+        var optoutContainerExpanded = document.getElementById("al_optout_container_expanded");
+        optoutContainerExpanded.style.display = "none";
+    }
+
+    function al_onFeedbackItemClicked(rating) {
+      var optoutBodyTextContainer = document.getElementById("al_optout_body_text_container");
+      optoutBodyTextContainer.style.display = "none";
+      var optoutBodyOptionsContainer = document.getElementById("al_optout_body_options_container");
+      optoutBodyOptionsContainer.style.display = "none";
+
+      var optoutBodyFeedbackContainer = document.getElementById("al_optout_body_feedback_container");
+      optoutBodyFeedbackContainer.style.display = "flex";
+
+      setTimeout(function() {
+        al_onOptOutCloseClicked();
+      }, 1000);
+
+      const AD_RATING_URL = "https://prod-bid.applovin.com/1.0/event/ad_rate?clcode=4!v3!395139.1719898815!aIuUvJidCVEF6A3fdBayj3MZdaEN196c_V8zfileUwEvModgDzUXM7GYAcfTHSmsZVt9abGmzDKbdEFU6o1lkPsOb7Nmds6xLZ_xLemffMbalZVctL4S0Z0dx_2L5fgKgUrDRG2veSZ5rH2LQrRcrz-zfXBQuW6RU_b_0zwn4TPKGj1yx7BF3j0F5fPLla9VulmrQmGnU7m5W2DoZ0Qzajzi-q6i6hQcixtbCCD4iCmYnQdfaQk3AzdUt9WEExwTSSqghC1MrwGpVW6K7iyXFEgJenaUn74QoFvpKQjoHM5aS0ouMK5tRF7CDzxac-H9U2eMHTeDghMAipF7QgcwhzOCnfm-3zo6t_V_tvZKu-wtPAqdyQodDDLOsb4YvNkyploeQrf22IvgXIGahoq5aAJSRaBE-cbvvDkZUsH-mYbws9JtK2COfWeQ0ll3lrAmMGZdTrn6yNr8tkIym4_TEjTSFltCzEHH8W9-Qh_miMUdKartqsiTysmoZDN_2HTeqFD07SMxROzpcp1ddlTGofaI5FAAgk0JaDlo-VzEJcHKJGsAjzjq14QUB5rO2DpHFWnw7jt11EshOQQFQzyd0jNz1mhEYE793xJJ5T_qT-XPUFN_QndRScMSkkMoqQ6qP0LsWskIilmhdh1ab1jbJIdPy4Q2R_DNeTp6Qkb2Zyw-snkMTO0_XYBU8Fg0kjwFs6EgY8zCi7IZ0kfGf_DhHOopoBmDz4TyEc32ZkQcaP5zrcJYjjpix3jjFw4aL-mIwo7zGYTrkc6cns34hFOKawwU9OG-V95S_yzqdi_fjbTLkDpHaAz0GcyEYJsBnU9YN15ATEC4z-IMqLmcUAeQelBObu3OHR_VNROybGXnkajSPWMM-S6vwh-Nc1mARkBZcAu-F9wPuVJX4VFbzbzUEZWZJpKxU1FwcQ4nmE1yd1HH3-meU-hOUG0PHx_3afqSbaJoCPrqr8nAYnmRCLnJsxVEzPFgGlARyreltYmLuTotLEjNH2xMOiQ4cq_ruHjYHLpCV0nMntoeJnn66RduTV-EG7M8gNojzq-Zx6ZD1aYZINO1dwMhJaP7HzCnCClFc0BAjhX6FgFzQ1C936DOKOxKUyH97XM96DsdkjofPecAP0aGPosJ1lkf3BFzNIG4c3Jz5Ulz_oNVNhuu3Qzk57-0Th_mAlTKcKAvis1MYkOO0bUqLGrvNGaFgMz8eYauXb-YokB1fnezeGWLtFrMJW4Sl11V-I-U7rZ-Qpy2p_HQJMdAy1lng058IWqT_y_4IvMXxZDItIdOyWIzeVcl591JiKCZWxi-qsynAKIMQIGZJxILZRQhCiAn_FSqg26N-YkXnE3PVH6eAVWSxoBzS4a1YIkbyQNAduYRYg3rYjVt2fBRyNpuT4DBzbg57n4EV73RiVXu4VAdphg3kOlR7OxRBc3BQTidjFOxuzLtHmn4qrIQHOd9Q5wXyNMJ4WWhDZYGdNreLEBojyO1XkgRM9XW2IsZ9Kbg7bxm3Qas96nKkw7WzJZ6Dtq7DfxjEjMber-m0GzR9vzd7FlYRwm_j4p6LZ85D6Rc1zGZHZqYW6la4xEPNQmSWcw-5RJEZLMFlQgkRULs9rVuNoSSmyemrH1dNlYRcfK-kifkdLddK8zMfVh6JXwVgCJg9yWJ3gJ_itm1-OeGDl_KmlpqLj6nusMim7PUbBb6tp99Ppj0o2w_2KhU0683obsJgkIB3ubG";
+      var img = new Image();
+      img.src = AD_RATING_URL + '&rt=' + rating;
+    }
+
+    function al_appendOptOutHtml(el, str) {
+        var div = document.createElement('div');
+        div.innerHTML = str;
+        while (div.children.length > 0) {
+            el.appendChild(div.children[0]);
+        }
+
+        const optoutContainerDiv = document.getElementById("al_optout_container");
+        optoutContainerDiv.ontouchstart = al_optoutClickCooldown;
+        optoutContainerDiv.onmousedown = al_optoutClickCooldown;
+
+        const optoutContainerExpandedDiv = document.getElementById("al_optout_container_expanded");
+        optoutContainerExpandedDiv.ontouchstart = al_optoutClickCooldown;
+        optoutContainerExpandedDiv.onmousedown = al_optoutClickCooldown;
+
+        document.addEventListener("touchstart", function(event) {
+            if (!optoutContainerExpandedDiv.contains(event.target) && optoutContainerExpandedDiv.style.display !== "none") {
+              al_onOptOutCloseClicked();
+            }
+        }, true);
+    }
+
+    function al_openOptOutUrl() {
+        var htoken = '';
+        /* Multiple deep links to support both WebView video button and endcard */
+        var url1 = "applovin://com.applovin.sdk/load_url?load_type=external&n=https://dash.applovin.com/p/how-applovin-shows-you-ads";
+        var url2 = "applovin://com.applovin.sdk/adservice/load_url?load_type=external&n=https://dash.applovin.com/p/how-applovin-shows-you-ads";
+        if (htoken.length > 0 && htoken.charAt(0) != '{') {
+            url1 += '?id=' + htoken;
+            url2 += '?id=' + htoken;
+        }
+        window.location.href = url1;
+        window.location.href = url2;
+    }
+
+    function al_optoutClickCooldown() {
+      if (typeof window.mraid.startClickCooldown === "function") {
+        window.mraid.startClickCooldown();
+      }
+    }
+
+    function al_renderAdInfoButton() {
+        var optoutStyles = `
+            #al_optout_container{border-radius:0 3px 0 0;background:rgba(0,0,0,0.2);bottom:0;left:0;box-sizing:content-box;padding:1.5px;z-index:2147483647;position:fixed;pointer-events:auto;}
+            #al_optout_icon{display:block;opacity:0.3;height:12px;width:12px;pointer-events:auto;}
+            #al_optout_list{margin-top:0;margin-bottom:0;box-sizing:content-box;padding-top:0;padding-bottom:10px;padding-left:20px;opacity:0.7;}
+            #al_optout_container_expanded{display:none;flex-direction:column;align-items:flex-start;border-radius: 8px;background: rgba(15, 15, 15, 0.99);position:fixed;pointer-events:auto;left:4%;bottom:15%;width:92%;z-index:2147483647;overflow:scroll;}
+            #al_optout_title_container{display: flex;box-sizing:content-box;padding: 12px 16px;justify-content: space-between;align-items: center;}
+            #al_optout_title_text_container{display:flex;align-items:flex-start;gap: 5px;opacity:0.5;}
+            #al_optout_title_text{color:#FFF;text-align: center;font-family: Avenir Next;font-size: 13px;font-style: normal;font-weight: 500;line-height: 100%;}
+            #al_optout_title_close_container{width: 22px;height: 22px;flex-shrink: 0;}
+            #al_optout_body_close_container{display:none;width: 22px;height: 100%;}
+            #al_optout_close_background{width: 22px;height: 22px;flex-shrink: 0;fill: #FFF;opacity:0.1;position:absolute;}
+            #al_optout_close_button{width: 20px;height: 20px;flex-shrink: 0;position:static;}
+            #al_optout_info_svg{width:20px;height:20px;}
+            .al_closeLine{stroke: #FFF;stroke-width: 7%;stroke-linecap: round;fill: none;}
+            .al_optout_line{width: 100%;height: 1px;background: rgba(255, 255, 255, 0.10);}
+            #al_optout_body_container{display: flex;box-sizing:content-box;width:auto;height:147px;padding: 20px 16px 20px 16px;flex-direction: column;align-items: center;gap: 20px;}
+            #al_optout_body_text_container{display: flex;flex-direction: column;align-items: center;align-self: stretch;}
+            #al_optout_body_text_top{align-self: stretch;color:#FFF;text-align: center;font-family: Avenir Next;font-size: 24px;font-style: normal;font-weight: 600;line-height: 110%;}
+            #al_optout_body_text_bottom{align-self: stretch;text-align: center;font-family: Avenir Next;font-size: 24px;font-style: normal;font-weight: 600;line-height: 110%;background: linear-gradient(270deg, #A88FFF 0%, #FF608D 100%);background-clip: text;-webkit-background-clip: text;-webkit-text-fill-color: transparent;}
+            #al_optout_body_text_short_top{display:none;color:#FFF;font-family: Avenir Next;font-size: 12px;font-style: normal;font-weight: 600;line-height: 110%;}
+            #al_optout_body_text_short_bottom{display:none;font-family: Avenir Next;font-size: 12px;font-style: normal;font-weight: 600;line-height: 110%;background: linear-gradient(270deg, #A88FFF 0%, #FF608D 100%);background-clip: text;-webkit-background-clip: text;-webkit-text-fill-color: transparent;}
+            #al_optout_body_options_container{display: flex;align-items: flex-start;gap: 6px;align-self: stretch;width:auto}
+            .al_optout_body_rating_container{display: flex;box-sizing:content-box;padding: 14px 5.75px 8px 5.75px;width:100%;flex-direction: column;justify-content: flex-end;align-items: center;gap: 8px;flex: 1 0 0;border-radius:8px;background: rgba(255, 255, 255, 0.10);}
+            .al_optout_body_rating_text_top{color: #000;text-align: center;font-family: Sora;font-size: 30px;font-style: normal;font-weight: 700;line-height: 100%;}
+            .al_optout_body_rating_text_bottom{width:max-content;color:#FFF;text-align: center;font-family: Avenir Next;font-size: 14px;font-style: normal;font-weight: 600;line-height: 110%;}
+            #al_optout_body_feedback_container{display: none;height: 100%;width: 100%;row-gap: 16px;flex-direction: column;justify-content: center;align-items:center;}
+            #al_optout_body_feedback_icon_container{display:flex;width: 40px;height: 40px;}
+            #al_optout_body_feedback_icon_ellipse{position:absolute;width: 40px;height: 40px;flex-shrink: 0;stroke-width: 2.424px;stroke: #FFF;}
+            #al_optout_body_feedback_icon_check{position:relative;left:4px;top:4px;width: 30px;height: 30px;flex-shrink: 0;}
+            #al_optout_body_feedback_text_container{width:max-content;height:max-content;flex-direction:column;}
+            #al_optout_body_feedback_text_top{display:none;color:#FFF;text-align: center;font-family: Avenir Next;font-size: 12px;font-style: normal;font-weight: 500;line-height: 100%;opacity: 0.5;}
+            #al_optout_body_feedback_text{display:flex;color:#FFF;font-family: Avenir Next;font-size: 20px;font-style: normal;font-weight: 600;line-height: 110%;}
+            #al_optout_subtitle_container{display: flex;box-sizing:content-box;padding:12px 16px;justify-content:space-between;align-items:center;}
+            #al_optout_subtitle_text_container{display: flex;}
+            #al_optout_subtitle_text{color:#FFF;font-family: Avenir Next;font-size: 12px;font-style: normal;font-weight: 600;line-height: 110%;opacity: 0.5;text-decoration: none;}
+            #al_subtitle_chevron{width: 24px;height: 24px;flex-shrink: 0;}
+            .al_optout_ad_preferences_clickable{text-decoration:none;}
+            @media(orientation: landscape) and (max-height: 599px) {
+                #al_optout_container_expanded{bottom:30%;left:16%;width:68%;}
+                #al_optout_body_container{height:132px;padding: 6px 16px 20px 16px;}
+                #al_optout_title_container{padding: 7px 16px;}
+                #al_optout_subtitle_container{padding: 5px 16px;}
+            }
+            @media(orientation: landscape) and (min-height: 600px) {
+                #al_optout_container_expanded{bottom:30%;left:25%;width:50%;}
+            }
+            @media(max-height: 249px) {
+                #al_optout_container_expanded{height:100%;width:100%;bottom:0px;left:0px;}
+                #al_optout_title_container{display:none;}
+                #al_optout_body_container{flex-direction:row;justify-content:space-between;gap:0px;padding: 0px 6px 0px 8px;height:100%;}
+                #al_optout_body_text_top{display:none;}
+                #al_optout_body_text_bottom{display:none;}
+                #al_optout_body_text_container{height:-webkit-fit-content;width:116px;align-items:flex-start;align-self: center;}
+                #al_optout_body_text_short_top{display:-webkit-inline-box;}
+                #al_optout_body_text_short_bottom{display:-webkit-inline-box;}
+                #al_optout_subtitle_container{display:none;}
+                .al_optout_line{display:none;}
+                #al_optout_body_options_container{height:-webkit-fit-content;width:-webkit-fit-content;gap:3px;margin-right:28px;align-self:center;}
+                .al_optout_body_rating_container{padding: 7px 6px 7px 6px;width:-webkit-fit-content;justify-content: center;}
+                .al_optout_body_rating_text_top{font-size:22px;}
+                .al_optout_body_rating_text_bottom{display:none;}
+                .al_closeLine{opacity:0.5;}
+                #al_optout_body_close_container{display:flex;position:absolute;right:6px;width:-webkit-fit-content;height:-webkit-fit-content;align-self:center;flex-direction:column;}
+                #al_optout_info_svg{width:20px;height:20px;}
+                #al_optout_close_button{position:initial;width:20px;height:20px;}
+                #al_optout_body_feedback_container{row-gap:0px;flex-direction:initial;gap:6px;}
+                #al_optout_body_feedback_text_top{display:flex;}
+                #al_optout_body_feedback_text{font-size: 12px;}
+                #al_optout_body_feedback_icon_container{width:20px;height:20px;margin-top:0px;}
+                #al_optout_body_feedback_icon_ellipse{width:20px;height:20px;}
+                #al_optout_body_feedback_icon_check{width:15px;height:15px;left:3px;top:3px;}
+            }
+            @media(max-height: 249px) and (min-height:90px) and (min-width:560px){
+                #al_optout_container_expanded{height:100%;width:100%;bottom:0px;left:0px;}
+                #al_optout_title_container{display:none;}
+                #al_optout_body_container{flex-direction:row;justify-content:space-between;gap:0px;padding: 0px 56px 0px 24px;height:100%;}
+                #al_optout_body_text_top{display:none;}
+                #al_optout_body_text_bottom{display:none;}
+                #al_optout_body_text_container{height:max-content;width:max-content;align-items:flex-start;align-self:center;}
+                #al_optout_body_text_short_top{display:-webkit-inline-box;font-size: 22px;}
+                #al_optout_body_text_short_bottom{display:-webkit-inline-box;font-size:22px;}
+                #al_optout_subtitle_container{display:none;}
+                .al_optout_line{display:none;}
+                #al_optout_body_options_container{height:-webkit-fit-content;width:-webkit-fit-content;gap:8px;margin-right:0px;align-self:center;}
+                .al_optout_body_rating_container{padding: 12px 12px 12px 12px;width:-webkit-fit-content;justify-content: center;}
+                .al_optout_body_rating_text_top{font-size:36px;}
+                .al_optout_body_rating_text_bottom{display:none;}
+                .al_closeLine{opacity:0.5;}
+                #al_optout_body_close_container{display:flex;position:absolute;right:16px;width:-webkit-fit-content;height:-webkit-fit-content;align-self:center;flex-direction:column;}
+                #al_optout_close_button{position:initial;width:24px;height:24px;}
+                #al_optout_info_svg{width:24px;height:24px;}
+                #al_optout_body_feedback_container{row-gap:0px;flex-direction:initial;gap:16px;}
+                #al_optout_body_feedback_text_top{display:flex;font-size:18px}
+                #al_optout_body_feedback_text{font-size: 22px;}
+                #al_optout_body_feedback_icon_container{width:36px;height:36px;margin-top:0px;}
+                #al_optout_body_feedback_icon_ellipse{width:36px;height:36px;}
+                #al_optout_body_feedback_icon_check{width:32px;height:32px;left:2px;top:2px;}
+            }
+            @media(max-height: 349px) and (min-height:250px) {
+                #al_optout_container_expanded{left:0px;width:100%;height:100%;bottom:0px;}
+                #al_optout_body_container{height: 134px;padding: 18px 6px 18px 6px;gap: 11px;}
+                #al_optout_title_container{padding: 9px 10px;}
+                #al_optout_subtitle_text{font-size:11px;}
+                #al_optout_body_rating_container{padding: 7px 6.75px 4px 6.75px;}
+                #al_optout_body_text_top{font-size:20px;}
+                #al_optout_body_text_bottom{font-size:20px;}
+                #al_optout_subtitle_container{padding: 4px 10px;}
+                #al_optout_title_text{font-size:12px;}
+            }`;
+
+        var css = document.createElement("style");
+        css.type = "text/css";
+        if (css.styleSheet) {
+            css.styleSheet.cssText = optoutStyles;
+        } else {
+            css.appendChild(document.createTextNode(optoutStyles));
+        }
+
+        var optoutDiv = `
+            <div id="al_optout_container" onclick="al_onOptOutIconClicked()">
+              <img id="al_optout_icon" src="https://img.applovin.com/1381250003_28x28.png" alt="(i)"/>
+            </div>
+            <div id="al_optout_container_expanded">
+                <div id="al_optout_title_container">
+                    <div id="al_optout_title_text_container">
+                        <span id="al_optout_title_text">This advertisement was served by AppLovin</span>
+                    </div>
+                    <div id="al_optout_title_close_container" onclick="al_onOptOutCloseClicked()">
+                        <svg id="al_optout_close_button">
+                            <circle id="al_optout_close_background" r="50%" cx="50%" cy="50%"/>
+                            <line class="al_closeLine" x1="32%" y1="32%" x2="68%" y2="68%"/>
+                            <line class="al_closeLine" x1="32%" y1="68%" x2="68%" y2="32%"/>
+                        </svg>
+                    </div>
+                </div>
+                <div class="al_optout_line"></div>
+                <div id="al_optout_body_container">
+                    <div id="al_optout_body_text_container">
+                        <span id="al_optout_body_text_top">Let us know how this ad</span>
+                        <span id="al_optout_body_text_bottom">made you feel</span>
+                        <span id="al_optout_body_text_short_top">Let us know how this</span>
+                        <span id="al_optout_body_text_short_bottom">ad made you feel</span>
+                    </div>
+                    <div id="al_optout_body_options_container">
+                        <div class="al_optout_body_rating_container" onclick="al_onFeedbackItemClicked(0)">
+                            <span class="al_optout_body_rating_text_top">&#128525;</span>
+                            <span class="al_optout_body_rating_text_bottom">Love!</span>
+                        </div>
+                        <div class="al_optout_body_rating_container" onclick="al_onFeedbackItemClicked(1)">
+                            <span class="al_optout_body_rating_text_top">&#128528;</span>
+                            <span class="al_optout_body_rating_text_bottom">Okay</span>
+                        </div>
+                        <div class="al_optout_body_rating_container" onclick="al_onFeedbackItemClicked(2)">
+                            <span class="al_optout_body_rating_text_top"">&#128545;</span>
+                            <span class="al_optout_body_rating_text_bottom">Bad</span>
+                        </div>
+                        <div class="al_optout_body_rating_container" onclick="al_onFeedbackItemClicked(3)">
+                            <span class="al_optout_body_rating_text_top">&#128553;</span>
+                            <span class="al_optout_body_rating_text_bottom">Broken ad</span>
+                        </div>
+                    </div>
+                    <div id="al_optout_body_close_container">
+                        <a class="al_optout_ad_preferences_clickable" onclick="al_openOptOutUrl()">
+                            <svg id="al_optout_info_svg" viewBox="-2 -2 20 20" fill="none">
+                                <path opacity="0.5" fill-rule="evenodd" clip-rule="evenodd" d="M8 13.5C11.0376 13.5 13.5 11.0376 13.5 8C13.5 4.96243 11.0376 2.5 8 2.5C4.96243 2.5 2.5 4.96243 2.5 8C2.5 11.0376 4.96243 13.5 8 13.5ZM8 14.5C11.5899 14.5 14.5 11.5899 14.5 8C14.5 4.41015 11.5899 1.5 8 1.5C4.41015 1.5 1.5 4.41015 1.5 8C1.5 11.5899 4.41015 14.5 8 14.5ZM9 4.5V6.5H7V4.5H9ZM9 11.5V7.5H7V11.5H9Z" fill="white"/>
+                            </svg>
+                        </a>
+                        <svg id="al_optout_close_button" onclick="al_onOptOutCloseClicked()">
+                            <line class="al_closeLine" x1="32%" y1="32%" x2="68%" y2="68%"/>
+                            <line class="al_closeLine" x1="32%" y1="68%" x2="68%" y2="32%"/>
+                        </svg>
+                    </div>
+                    <div id="al_optout_body_feedback_container">
+                        <div id="al_optout_body_feedback_icon_container">
+                            <svg id="al_optout_body_feedback_icon_ellipse" width="41" height="40" viewBox="0 0 41 40" fill="none">
+                                <circle cx="20.5" cy="20" r="18.7879" stroke="white" stroke-width="2.42424"/>
+                            </svg>
+                            <svg id="al_optout_body_feedback_icon_check" width="31" height="31" viewBox="0 0 31 31" fill="none">
+                              <path d="M11.7501 20.8754L7.37515 16.5004C6.88765 16.0129 6.11265 16.0129 5.62515 16.5004C5.13765 16.9879 5.13765 17.7629 5.62515 18.2504L10.8626 23.4879C11.3501 23.9754 12.1376 23.9754 12.6251 23.4879L25.8751 10.2504C26.3626 9.76289 26.3626 8.98789 25.8751 8.50039C25.3876 8.01289 24.6126 8.01289 24.1251 8.50039L11.7501 20.8754Z" fill="white"/>
+                            </svg>
+                        </div>
+                        <div id="al_optout_body_feedback_text_container">
+                            <span id="al_optout_body_feedback_text_top">Ad served by AppLovin</span>
+                            <span id="al_optout_body_feedback_text">Thanks for the feedback</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="al_optout_line"></div>
+                <a class="al_optout_ad_preferences_clickable" onclick="al_openOptOutUrl()">
+                    <div id="al_optout_subtitle_container">
+                        <div id="al_optout_subtitle_text_container">
+                            <span id="al_optout_subtitle_text">Tap here to learn more about ad preferences.</span>
+                        </div>
+                        <svg id="al_subtitle_chevron" width="24" height="24" viewBox="0 0 24 24" fill="none">
+                            <path d="M10.4497 7.05025L15.3995 12L10.4497 16.9497" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                </a>
+              </div>`;
+        document.getElementsByTagName("head")[0].appendChild(css);
+        al_appendOptOutHtml(document.body, optoutDiv);
+        window.al_optoutButtonRendered = true;
+    }
+</script>  <script type='text/javascript'>
+    var al_isInteractionCooldown = 0;
+    function al_reportAdInteraction(e) {
+        if ( al_isInteractionCooldown ) {
+            return;
+        } else {
+            al_isInteractionCooldown = 1;
+        }
+        setTimeout(function(){
+            al_isInteractionCooldown = 0;
+        }, 1000 );
+
+        x = e.pageX;
+        y = e.pageY;
+        w = window.innerWidth;
+        h = window.innerHeight;
+        h_percent = (x/w).toFixed(4);
+        v_percent = (y/h).toFixed(4);
+
+        window.al_last_clk_event = {
+            'x': x,
+            'y': y,
+            'w': w,
+            'h': h,
+            'h_percent': h_percent,
+            'v_percent': v_percent,
+        };
+
+        var trackingUrl = "https://bid.applovin.com/1.0/event/interact?clcode=4!v3!395139.1719898815!aIuUvJidCVEF6A3fdBayj3MZdaEN196c_V8zfileUwEvModgDzUXM7GYAcfTHSmsZVt9abGmzDKbdEFU6o1lkPsOb7Nmds6xLZ_xLemffMbalZVctL4S0Z0dx_2L5fgKgUrDRG2veSZ5rH2LQrRcrz-zfXBQuW6RU_b_0zwn4TPKGj1yx7BF3j0F5fPLla9VulmrQmGnU7m5W2DoZ0Qzajzi-q6i6hQcixtbCCD4iCmYnQdfaQk3AzdUt9WEExwTSSqghC1MrwGpVW6K7iyXFEgJenaUn74QoFvpKQjoHM5aS0ouMK5tRF7CDzxac-H9U2eMHTeDghMAipF7QgcwhzOCnfm-3zo6t_V_tvZKu-wtPAqdyQodDDLOsb4YvNkyploeQrf22IvgXIGahoq5aAJSRaBE-cbvvDkZUsH-mYbws9JtK2COfWeQ0ll3lrAmMGZdTrn6yNr8tkIym4_TEjTSFltCzEHH8W9-Qh_miMUdKartqsiTysmoZDN_2HTeqFD07SMxROzpcp1ddlTGofaI5FAAgk0JaDlo-VzEJcHKJGsAjzjq14QUB5rO2DpHFWnw7jt11EshOQQFQzyd0jNz1mhEYE793xJJ5T_qT-XPUFN_QndRScMSkkMoqQ6qP0LsWskIilmhdh1ab1jbJIdPy4Q2R_DNeTp6Qkb2Zyw-snkMTO0_XYBU8Fg0kjwFs6EgY8zCi7IZ0kfGf_DhHOopoBmDz4TyEc32ZkQcaP5zrcJYjjpix3jjFw4aL-mIwo7zGYTrkc6cns34hFOKawwU9OG-V95S_yzqdi_fjbTLkDpHaAz0GcyEYJsBnU9YN15ATEC4z-IMqLmcUAeQelBObu3OHR_VNROybGXnkajSPWMM-S6vwh-Nc1mARkBZcAu-F9wPuVJX4VFbzbzUEZWZJpKxU1FwcQ4nmE1yd1HH3-meU-hOUG0PHx_3afqSbaJoCPrqr8nAYnmRCLnJsxVEzPFgGlARyreltYmLuTotLEjNH2xMOiQ4cq_ruHjYHLpCV0nMntoeJnn66RduTV-EG7M8gNojzq-Zx6ZD1aYZINO1dwMhJaP7HzCnCClFc0BAjhX6FgFzQ1C936DOKOxKUyH97XM96DsdkjofPecAP0aGPosJ1lkf3BFzNIG4c3Jz5Ulz_oNVNhuu3Qzk57-0Th_mAlTKcKAvis1MYkOO0bUqLGrvNGaFgMz8eYauXb-YokB1fnezeGWLtFrMJW4Sl11V-I-U7rZ-Qpy2p_HQJMdAy1lng058IWqT_y_4IvMXxZDItIdOyWIzeVcl591JiKCZWxi-qsynAKIMQIGZJxILZRQhCiAn_FSqg26N-YkXnE3PVH6eAVWSxoBzS4a1YIkbyQNAduYRYg3rYjVt2fBRyNpuT4DBzbg57n4EV73RiVXu4VAdphg3kOlR7OxRBc3BQTidjFOxuzLtHmn4qrIQHOd9Q5wXyNMJ4WWhDZYGdNreLEBojyO1XkgRM9XW2IsZ9Kbg7bxm3Qas96nKkw7WzJZ6Dtq7DfxjEjMber-m0GzR9vzd7FlYRwm_j4p6LZ85D6Rc1zGZHZqYW6la4xEPNQmSWcw-5RJEZLMFlQgkRULs9rVuNoSSmyemrH1dNlYRcfK-kifkdLddK8zMfVh6JXwVgCJg9yWJ3gJ_itm1-OeGDl_KmlpqLj6nusMim7PUbBb6tp99Ppj0o2w_2KhU0683obsJgkIB3ubG" + "&h_p=" + h_percent + "&v_p=" + v_percent + "&x_s=" + (window.al_close_button_state || 'unknown');
+        var trackingFrame = document.createElement('iframe');
+        trackingFrame.style.display = 'none';
+        trackingFrame.src = trackingUrl;
+        document.body.appendChild(trackingFrame);
+    }
+    function al_attachInteractionListeners() {
+        document.addEventListener('pointerdown', al_reportAdInteraction, true);
+        document.addEventListener('touchstart', al_reportAdInteraction, true);
+        document.addEventListener('mousedown', al_reportAdInteraction, true);
+    }
+    setTimeout(al_attachInteractionListeners, 100);
+    setTimeout(al_attachInteractionListeners, 1000);
+    setTimeout(al_attachInteractionListeners, 5000);
+</script><script type='text/javascript'>
+(function(global) {
+    'use strict';
+
+    const ALPlayableEvent = {
+        STARTED: 'STARTED',
+        COMPLETED: 'COMPLETED',
+        REDIRECT: 'REDIRECT',
+        CHALLENGE_SOLVED: 'CHALLENGE_SOLVED',
+        CHALLENGE_FAILED: 'CHALLENGE_FAILED'
+    };
+    const ANALYTICS_URL = 'https://prod-a-events.applovin.com/playable_ad?clcode=4!v3!395139.1719898815!aIuUvJidCVEF6A3fdBayj3MZdaEN196c_V8zfileUwEvModgDzUXM7GYAcfTHSmsZVt9abGmzDKbdEFU6o1lkPsOb7Nmds6xLZ_xLemffMbalZVctL4S0Z0dx_2L5fgKgUrDRG2veSZ5rH2LQrRcrz-zfXBQuW6RU_b_0zwn4TPKGj1yx7BF3j0F5fPLla9VulmrQmGnU7m5W2DoZ0Qzajzi-q6i6hQcixtbCCD4iCmYnQdfaQk3AzdUt9WEExwTSSqghC1MrwGpVW6K7iyXFEgJenaUn74QoFvpKQjoHM5aS0ouMK5tRF7CDzxac-H9U2eMHTeDghMAipF7QgcwhzOCnfm-3zo6t_V_tvZKu-wtPAqdyQodDDLOsb4YvNkyploeQrf22IvgXIGahoq5aAJSRaBE-cbvvDkZUsH-mYbws9JtK2COfWeQ0ll3lrAmMGZdTrn6yNr8tkIym4_TEjTSFltCzEHH8W9-Qh_miMUdKartqsiTysmoZDN_2HTeqFD07SMxROzpcp1ddlTGofaI5FAAgk0JaDlo-VzEJcHKJGsAjzjq14QUB5rO2DpHFWnw7jt11EshOQQFQzyd0jNz1mhEYE793xJJ5T_qT-XPUFN_QndRScMSkkMoqQ6qP0LsWskIilmhdh1ab1jbJIdPy4Q2R_DNeTp6Qkb2Zyw-snkMTO0_XYBU8Fg0kjwFs6EgY8zCi7IZ0kfGf_DhHOopoBmDz4TyEc32ZkQcaP5zrcJYjjpix3jjFw4aL-mIwo7zGYTrkc6cns34hFOKawwU9OG-V95S_yzqdi_fjbTLkDpHaAz0GcyEYJsBnU9YN15ATEC4z-IMqLmcUAeQelBObu3OHR_VNROybGXnkajSPWMM-S6vwh-Nc1mARkBZcAu-F9wPuVJX4VFbzbzUEZWZJpKxU1FwcQ4nmE1yd1HH3-meU-hOUG0PHx_3afqSbaJoCPrqr8nAYnmRCLnJsxVEzPFgGlARyreltYmLuTotLEjNH2xMOiQ4cq_ruHjYHLpCV0nMntoeJnn66RduTV-EG7M8gNojzq-Zx6ZD1aYZINO1dwMhJaP7HzCnCClFc0BAjhX6FgFzQ1C936DOKOxKUyH97XM96DsdkjofPecAP0aGPosJ1lkf3BFzNIG4c3Jz5Ulz_oNVNhuu3Qzk57-0Th_mAlTKcKAvis1MYkOO0bUqLGrvNGaFgMz8eYauXb-YokB1fnezeGWLtFrMJW4Sl11V-I-U7rZ-Qpy2p_HQJMdAy1lng058IWqT_y_4IvMXxZDItIdOyWIzeVcl591JiKCZWxi-qsynAKIMQIGZJxILZRQhCiAn_FSqg26N-YkXnE3PVH6eAVWSxoBzS4a1YIkbyQNAduYRYg3rYjVt2fBRyNpuT4DBzbg57n4EV73RiVXu4VAdphg3kOlR7OxRBc3BQTidjFOxuzLtHmn4qrIQHOd9Q5wXyNMJ4WWhDZYGdNreLEBojyO1XkgRM9XW2IsZ9Kbg7bxm3Qas96nKkw7WzJZ6Dtq7DfxjEjMber-m0GzR9vzd7FlYRwm_j4p6LZ85D6Rc1zGZHZqYW6la4xEPNQmSWcw-5RJEZLMFlQgkRULs9rVuNoSSmyemrH1dNlYRcfK-kifkdLddK8zMfVh6JXwVgCJg9yWJ3gJ_itm1-OeGDl_KmlpqLj6nusMim7PUbBb6tp99Ppj0o2w_2KhU0683obsJgkIB3ubG';
+
+    const ALPlayableAnalytics = {};
+
+    ALPlayableAnalytics.trackEvent = function(eventName) {
+        if (!Object.values(ALPlayableEvent).includes(eventName)) {
+            console.error('Failed to track invalid ALPlayableEvent: ', eventName);
+            return;
+        }
+
+        var last_clk_str = '';
+        var last_clk_event = window.al_last_clk_event;
+        if (typeof last_clk_event != 'undefined') {
+            last_clk_str = '&h_p=' + last_clk_event.h_percent + '&v_p=' + last_clk_event.v_percent;
+        }
+
+        var img = new Image();
+        img.src = ANALYTICS_URL + '&type=' + encodeURIComponent(eventName) + last_clk_str + '&x_s=' + (window.al_close_button_state || 'unknown');
+    };
+
+    global.ALPlayableEvent = ALPlayableEvent;
+    global.ALPlayableAnalytics = ALPlayableAnalytics;
+}(this));
+</script>
