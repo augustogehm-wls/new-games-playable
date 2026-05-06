@@ -42,6 +42,13 @@ function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
   W = window.innerWidth;
   H = window.innerHeight;
+  // Hard-reset the canvas bitmap before resizing — some iOS Safari versions
+  // skip allocating a fresh backing store when restoring from bfcache, which
+  // leaves the GPU rendering at the previous (often half-resolution) buffer
+  // and causes blurry textures after reload. Setting w/h to 0 first forces
+  // the browser to discard the old bitmap.
+  canvas.width = 0;
+  canvas.height = 0;
   canvas.width = Math.floor(W * DPR);
   canvas.height = Math.floor(H * DPR);
   canvas.style.width = W + 'px';
@@ -65,6 +72,7 @@ function rebuildLevelAndReset() {
   transit.length = 0;
   particles.length = 0;
   confetti.length = 0;
+  praises.length = 0;
   tweens.length = 0;
   buildLevel();
   resetTutorial();
@@ -80,15 +88,25 @@ window.addEventListener('orientationchange', () => {
 });
 // iOS Safari restores from the back-forward cache on reload, which can leave
 // the canvas at the previous page's pixel resolution while devicePixelRatio
-// or innerWidth/Height read stale values. Re-running resize on pageshow
-// rebuilds the canvas at the correct DPR and prevents the "blurry textures
-// after reload" symptom. e.persisted is true only on bfcache restore, but
-// some iOS versions miss the flag — we resize on every pageshow to be safe.
-window.addEventListener('pageshow', () => {
+// or innerWidth/Height read stale values. We chain several deferred resizes
+// over a 1-second window so we catch the state once iOS has fully settled
+// the layout (URL-bar collapse, dynamic viewport meta application, DPR
+// stabilisation). Each resize() now hard-resets the canvas bitmap, so a
+// late call still rebuilds at the correct resolution even if earlier ones
+// captured stale viewport metrics.
+function deferredResize() {
   resize();
-  // A second pass after layout settles catches late iOS adjustments
-  // (URL-bar collapse, dynamic viewport meta application).
-  setTimeout(resize, 200);
+  requestAnimationFrame(resize);
+  setTimeout(resize, 100);
+  setTimeout(resize, 350);
+  setTimeout(resize, 800);
+}
+window.addEventListener('pageshow', deferredResize);
+// iOS pauses canvas rendering when the tab is in the background; on return
+// the GPU surface can come back stale. Re-resize when the page becomes
+// visible again to refresh the bitmap.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) deferredResize();
 });
 
 // ============================================================
@@ -392,7 +410,15 @@ let atlasReady = false;
   const img = new Image();
   img.onload = () => {
     atlas = img;
-    atlasReady = true;
+    // decode() guarantees the bitmap is fully decoded into GPU memory before
+    // we start drawing — without it iOS Safari sometimes draws from a partial
+    // decode (visible as blurry sprites for the first few frames after load).
+    if (img.decode) {
+      img.decode().then(() => { atlasReady = true; })
+                  .catch(() => { atlasReady = true; });
+    } else {
+      atlasReady = true;
+    }
   };
   img.src = ATLAS_B64;
 })();
@@ -578,6 +604,14 @@ function buildLevel() {
         shake: 0,
         phase: 'normal',
         itemSx: 1, itemSy: 1, itemAlpha: 1, itemLift: 0,
+        // Per-slot scale + lift, layered ON TOP of itemSx/Sy. Used by the
+        // landing squash arc — only the slot the player just dropped into
+        // bounces, instead of the whole shelf rocking.
+        slot: [
+          { sx: 1, sy: 1, lift: 0 },
+          { sx: 1, sy: 1, lift: 0 },
+          { sx: 1, sy: 1, lift: 0 },
+        ],
         stampProgress: 0,
         soldOut: false,
       });
@@ -933,7 +967,16 @@ function drawBoard() {
             lift: cell.itemLift
           });
         } else {
-          drawItem(id, center.x + shake, center.y, board.slotW, board.slotH);
+          // Slot-level squash from the landing arc (1,1,0 when at rest, so
+          // we only allocate the opts object when there's an active animation).
+          const sl = cell.slot[s];
+          if (sl.sx !== 1 || sl.sy !== 1 || sl.lift !== 0) {
+            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
+              scaleX: sl.sx, scaleY: sl.sy, lift: sl.lift,
+            });
+          } else {
+            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH);
+          }
         }
       }
       // Pass 3: shelf floor (drawn AFTER items so the wood plank
@@ -1306,6 +1349,90 @@ function drawConfetti() {
   }
 }
 
+// === Landing bounce (per-slot squash & stretch) ===
+// Chains 3 short tweens on cell.slot[s] when an item lands in slot s. Total
+// runtime ~0.22s. Items in OTHER slots of the same shelf are unaffected.
+function triggerLandingBounce(c, r, s) {
+  const cell = shelves[r] && shelves[r][c];
+  if (!cell) return;
+  const slot = cell.slot[s];
+  killTweensOf(slot, ['sx', 'sy', 'lift']);
+  // Snap to the impact pose so the squash visibly starts at the floor —
+  // 1.18 wider, 0.82 shorter is roughly area-preserving and reads as a
+  // hard contact. From there the chain returns to neutral with a tiny
+  // overshoot up so the puppy feels rubbery.
+  slot.sx = 1.18; slot.sy = 0.82; slot.lift = 0;
+  tween(slot, { sx: 0.94, sy: 1.06, lift: 4 }, 0.10, { ease: 'outQuad', onComplete: () => {
+    tween(slot, { sx: 1.0, sy: 1.0, lift: 0 }, 0.10, { ease: 'outQuad' });
+  }});
+}
+
+// === Praise word popups ===
+// On every match, a short praise word ("Amazing!", "Lovely!"…) pops up at
+// the matched shelf's centre, scales up with a slight overshoot, and fades
+// out drifting upward. Pure cosmetic — does not gate any game state.
+const PRAISES = ['Amazing!', 'Lovely!', 'Nice!', 'Sweet!', 'Great!', 'Pawsome!'];
+const praises = [];
+function spawnPraise(x, y) {
+  praises.push({
+    x, y,
+    text: PRAISES[Math.floor(Math.random() * PRAISES.length)],
+    scale: 0.4,
+    alpha: 0,
+    vy: -32,
+    life: 0,
+    maxLife: 0.95,
+    // Pick a warm hue per popup so the screen feels alive over many matches.
+    hue: 24 + Math.random() * 24,   // 24°–48° = orange/amber
+  });
+}
+function updatePraises(dt) {
+  for (let i = praises.length - 1; i >= 0; i--) {
+    const p = praises[i];
+    p.life += dt;
+    p.y += p.vy * dt;
+    p.vy *= Math.exp(-dt * 1.6);   // decelerate the upward drift
+    const t = p.life / p.maxLife;
+    if (t < 0.18) {
+      p.scale = lerp(0.4, 1.30, EASE.outBack(t / 0.18));
+    } else if (t < 0.42) {
+      p.scale = lerp(1.30, 1.00, EASE.outQuad((t - 0.18) / 0.24));
+    } else {
+      p.scale = 1.00;
+    }
+    if (t < 0.10) p.alpha = t / 0.10;
+    else if (t < 0.65) p.alpha = 1.0;
+    else p.alpha = Math.max(0, 1.0 - (t - 0.65) / 0.35);
+    if (p.life >= p.maxLife) praises.splice(i, 1);
+  }
+}
+function drawPraises() {
+  if (!praises.length) return;
+  // Set the heavy state ONCE for the whole batch — font lookup is one of the
+  // pricier ctx operations, so we choose a fixed base size and scale into it
+  // via ctx.scale() per praise instead of mutating the font string each frame.
+  const basePx = Math.round(board.slotH * 0.55);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '800 ' + basePx + 'px system-ui, "Segoe UI", sans-serif';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(3, basePx * 0.16);
+  ctx.strokeStyle = 'rgba(70, 35, 8, 0.85)';
+  for (const p of praises) {
+    if (p.alpha <= 0) continue;
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.scale(p.scale, p.scale);
+    ctx.globalAlpha = p.alpha;
+    ctx.strokeText(p.text, 0, 0);
+    ctx.fillStyle = 'hsl(' + p.hue + ', 95%, 65%)';
+    ctx.fillText(p.text, 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function onPointerUp(e) {
   if (!drag) return;
   e.preventDefault && e.preventDefault();
@@ -1374,6 +1501,10 @@ function onPointerUp(e) {
     if (idx >= 0) transit.splice(idx, 1);
     // Landing puff at the disc's contact point on the shelf floor.
     spawnLandingPuff(target.x, target.y + board.slotH * 0.42);
+    // Squash & stretch on the landed slot — adds impact alongside the
+    // puff smoke. Compresses on impact, then a lighter rebound, then
+    // settles. Only this slot deforms; the rest of the shelf is steady.
+    triggerLandingBounce(tr.dstC, tr.dstR, tr.dstS);
     if (isShelfMatch(tr.dstC, tr.dstR)) triggerMatch(tr.dstC, tr.dstR);
     else checkWin();
   }});
@@ -1494,6 +1625,11 @@ function triggerMatch(c, r) {
   cell.itemSx = 1; cell.itemSy = 1; cell.itemAlpha = 1; cell.itemLift = 0;
   killTweensOf(cell, ['itemSx', 'itemSy', 'itemAlpha', 'itemLift', 'stampProgress']);
   sfxMatch();
+  // Praise popup just ABOVE the shelf — placing it above the cell (instead
+  // of inside) keeps it from being camouflaged by the paw-panel that slides
+  // down on top of the matched shelf, and gives it clean background sky.
+  const rect = shelfRect(c, r);
+  spawnPraise(rect.x + rect.w / 2, rect.y - rect.h * 0.10);
   // Subtle bouncy squash-stretch arc, area roughly preserved:
   //   1. Anticipation squash (slightly wider, shorter)
   //   2. Jump up (slightly taller, thinner) + lift Y
@@ -1741,6 +1877,7 @@ function loop(now) {
   updateDragShape(dt);
   updateParticles(dt);
   updateConfetti(dt);
+  updatePraises(dt);
   updateTutorial(dt);
   drawBackground();
   drawBoard();
@@ -1748,6 +1885,7 @@ function loop(now) {
   drawParticles();
   drawTutorialHand();
   drawDragItem();
+  drawPraises();    // praises ride above the board art but below win + confetti
   drawWinOverlay();
   drawConfetti();   // on top of the win overlay so confetti rains over the title
   requestAnimationFrame(loop);
@@ -1796,6 +1934,7 @@ if (location.search.indexOf('debug') >= 0) {
       dur: t.dur, delay: t.delay, elapsed: t.elapsed, alive: t.alive,
     })),
     tweensRaw: () => tweens.length,
+    praises: () => praises.map(p => ({ text: p.text, x: Math.round(p.x), y: Math.round(p.y), scale: +p.scale.toFixed(2), alpha: +p.alpha.toFixed(2), life: +p.life.toFixed(2) })),
     advance: (dt) => { updateTweens(dt); updateDragShape(dt); updateTutorial(dt); },
     redraw: () => {
       drawBackground(); drawBoard(); drawDragItem(); drawWinOverlay();
