@@ -462,6 +462,16 @@ const GRID_OPTIONS_LANDSCAPE = [[8,5], [8,4], [8,3]];
 const MIN_CELL_W_PX = 87;   // was 130, tightened by 1.5x so smaller phones still take 3 cols
 const MIN_CELL_H_PX = 60;   // was 90, same reasoning
 
+// === Idle "breathing" effect on every puppy on the board ===
+// Tiny per-slot scale wobble: scaleX uses sin, scaleY uses cos against the
+// same time argument so they're 90° out of phase — the puppy's silhouette
+// orbits a slowly-pulsing ellipse, reading as gentle breathing. Each slot
+// has its own random phase + frequency-multiplier (see `breath` field on
+// each cell, set once in buildLevel) so the board never looks synchronized.
+// Kept VERY subtle on purpose — at 2% the eye reads it as life, not motion.
+const BREATH_FREQ = 2.375;  // 1.9 * 1.25 — slightly snappier pulse; per-slot freqMul (1.25-1.50) still widens the spread
+const BREATH_AMP  = 0.010;  // ±1% scale; tuned to read as life, not motion
+
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
 // fruits, veggies, packaged goods, plush, flowers).
@@ -611,6 +621,17 @@ function buildLevel() {
           { sx: 1, sy: 1, lift: 0 },
           { sx: 1, sy: 1, lift: 0 },
           { sx: 1, sy: 1, lift: 0 },
+        ],
+        // Per-slot breathing data. Random phase + small frequency variation
+        // per slot is the JS analogue of a Unity MaterialPropertyBlock — set
+        // once at level build, read each frame, no per-frame allocations.
+        // The slot owns the rhythm; whichever puppy occupies the slot adopts
+        // it. This trades a tiny bit of physical realism (a puppy that moves
+        // changes its breath cadence) for zero gameplay state churn.
+        breath: [
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
         ],
         stampProgress: 0,
         soldOut: false,
@@ -967,16 +988,20 @@ function drawBoard() {
             lift: cell.itemLift
           });
         } else {
-          // Slot-level squash from the landing arc (1,1,0 when at rest, so
-          // we only allocate the opts object when there's an active animation).
+          // Idle breathing: sin for X, cos for Y so the puppy's silhouette
+          // traces a soft ellipse over time. Phase + freq are unique per slot
+          // (set once in buildLevel) so the board never breathes in lockstep.
+          const br = cell.breath[s];
+          const bt = totalTime * BREATH_FREQ * br.freqMul + br.phase;
+          const breathX = 1 + Math.sin(bt) * BREATH_AMP;
+          const breathY = 1 + Math.cos(bt) * BREATH_AMP;
+          // Slot-level squash from the landing arc (multiplied with breath).
           const sl = cell.slot[s];
-          if (sl.sx !== 1 || sl.sy !== 1 || sl.lift !== 0) {
-            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
-              scaleX: sl.sx, scaleY: sl.sy, lift: sl.lift,
-            });
-          } else {
-            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH);
-          }
+          drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
+            scaleX: sl.sx * breathX,
+            scaleY: sl.sy * breathY,
+            lift: sl.lift,
+          });
         }
       }
       // Pass 3: shelf floor (drawn AFTER items so the wood plank
