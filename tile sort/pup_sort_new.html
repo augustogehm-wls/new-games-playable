@@ -470,7 +470,7 @@ const MIN_CELL_H_PX = 60;   // was 90, same reasoning
 // has its own random phase + frequency-multiplier (see `breath` field on
 // each cell, set once in buildLevel) so the board never looks synchronized.
 // Kept VERY subtle on purpose — at 2% the eye reads it as life, not motion.
-const BREATH_FREQ = 2.375;  // 1.9 * 1.25 — slightly snappier pulse; per-slot freqMul (1.25-1.50) still widens the spread
+const BREATH_FREQ = 1.9;    // base rad/s; per-slot freqMul (1.25-1.50) widens the spread
 const BREATH_AMP  = 0.010;  // ±1% scale; tuned to read as life, not motion
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs

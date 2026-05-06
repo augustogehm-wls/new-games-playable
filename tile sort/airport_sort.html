@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <title>Airport Sort — Travel Items</title>
+<script src="mraid.js"></script>
 <style>
   * { padding:0; margin:0; user-select:none; -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; }
   html, body { background:#5d6975; position:absolute; top:0; right:0; left:0; bottom:0; overflow:hidden; }
@@ -1953,6 +1954,24 @@ if (location.search.indexOf('debug') >= 0) {
   };
 }
 
+})();
+</script>
+<!-- AppLovin/Axon CTA — TODO: replace placeholder URL with real app store link -->
+<style>
+#install-cta{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9999;padding:12px 28px;background:linear-gradient(180deg,#5cd66e 0%,#2a9c43 100%);color:#fff;font-weight:bold;font-size:15px;letter-spacing:1px;border-radius:24px;border:1px solid rgba(255,255,255,0.4);box-shadow:0 4px 12px rgba(0,0,0,0.4);text-shadow:0 1px 2px rgba(0,0,0,0.6);cursor:pointer;font-family:system-ui,-apple-system,sans-serif;-webkit-user-select:none;user-select:none;touch-action:manipulation;}
+#install-cta:active{transform:translateX(-50%) scale(0.96);}
+</style>
+<button id="install-cta" type="button">INSTALL NOW</button>
+<script>
+(function(){
+  var CTA_URL = 'https://play.google.com/store';
+  var btn = document.getElementById('install-cta');
+  function openCta(){
+    if (typeof mraid !== 'undefined' && mraid.open) mraid.open(CTA_URL);
+    else window.open(CTA_URL, '_blank');
+  }
+  btn.addEventListener('click', openCta);
+  btn.addEventListener('touchend', function(e){ e.preventDefault(); openCta(); });
 })();
 </script>
 </body>
