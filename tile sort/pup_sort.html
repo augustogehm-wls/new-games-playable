@@ -469,8 +469,8 @@ const MIN_CELL_H_PX = 60;   // was 90, same reasoning
 // has its own random phase + frequency-multiplier (see `breath` field on
 // each cell, set once in buildLevel) so the board never looks synchronized.
 // Kept VERY subtle on purpose — at 2% the eye reads it as life, not motion.
-const BREATH_FREQ = 1.9;    // ~0.30 Hz base — about 18 cycles/min, calm puppy
-const BREATH_AMP  = 0.020;  // ±2% scale; bigger and it becomes distracting
+const BREATH_FREQ = 1.9;    // base rad/s; per-slot freqMul (1.25-1.50) widens the spread
+const BREATH_AMP  = 0.010;  // ±1% scale; tuned to read as life, not motion
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
@@ -629,9 +629,9 @@ function buildLevel() {
         // it. This trades a tiny bit of physical realism (a puppy that moves
         // changes its breath cadence) for zero gameplay state churn.
         breath: [
-          { phase: Math.random() * Math.PI * 2, freqMul: 0.85 + Math.random() * 0.30 },
-          { phase: Math.random() * Math.PI * 2, freqMul: 0.85 + Math.random() * 0.30 },
-          { phase: Math.random() * Math.PI * 2, freqMul: 0.85 + Math.random() * 0.30 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
         ],
         stampProgress: 0,
         soldOut: false,
