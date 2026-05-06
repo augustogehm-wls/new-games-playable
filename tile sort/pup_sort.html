@@ -78,6 +78,18 @@ window.addEventListener('orientationchange', () => {
   setTimeout(resize, 50);
   setTimeout(resize, 350);
 });
+// iOS Safari restores from the back-forward cache on reload, which can leave
+// the canvas at the previous page's pixel resolution while devicePixelRatio
+// or innerWidth/Height read stale values. Re-running resize on pageshow
+// rebuilds the canvas at the correct DPR and prevents the "blurry textures
+// after reload" symptom. e.persisted is true only on bfcache restore, but
+// some iOS versions miss the flag — we resize on every pageshow to be safe.
+window.addEventListener('pageshow', () => {
+  resize();
+  // A second pass after layout settles catches late iOS adjustments
+  // (URL-bar collapse, dynamic viewport meta application).
+  setTimeout(resize, 200);
+});
 
 // ============================================================
 // TWEEN ENGINE
@@ -417,11 +429,12 @@ let COLS = 4, ROWS = 8;
 
 // Allowed grid shapes — pickGrid() walks these largest-first per orientation
 // and returns the first one whose computed cellW/cellH meet the minimum
-// readable thresholds below. Total tile count tops out at 5*8 = 40.
-const GRID_OPTIONS_PORTRAIT  = [[5,8], [4,8], [3,8], [2,8]];
-const GRID_OPTIONS_LANDSCAPE = [[8,5], [8,4], [8,3], [8,2]];
-const MIN_CELL_W_PX = 130;  // ~43px per slot — comfortable tap target
-const MIN_CELL_H_PX = 90;   // matches puppy aspect at usable sprite scale
+// readable thresholds below. Total tile count tops out at 5*8 = 40, and the
+// short axis is floored at 3 (2-wide / 2-tall boards felt too sparse).
+const GRID_OPTIONS_PORTRAIT  = [[5,8], [4,8], [3,8]];
+const GRID_OPTIONS_LANDSCAPE = [[8,5], [8,4], [8,3]];
+const MIN_CELL_W_PX = 87;   // was 130, tightened by 1.5x so smaller phones still take 3 cols
+const MIN_CELL_H_PX = 60;   // was 90, same reasoning
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
