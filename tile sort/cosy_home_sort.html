@@ -1371,7 +1371,8 @@ const PRAISE_ROTATION  = -0.262;   // -15° in radians
 const PRAISE_LETTER_STAGGER = 0.045;  // seconds between consecutive letter spawns
 const PRAISE_LETTER_DUR     = 0.26;   // seconds for one letter's land tween
 const PRAISE_BOUNCE_DUR     = 0.42;   // seconds for the group bounce + fade-out
-const PRAISE_BOUNCE_HEIGHT  = 36;     // px the word drifts upward during the bounce
+const PRAISE_BOUNCE_PEAK    = 1.20;   // peak scale of the pop bounce before the shrink
+const PRAISE_BOUNCE_POP_FRAC = 0.22;   // fraction of BOUNCE_DUR spent on the upward pop (1.0 -> 1.2)
 const praises = [];
 function spawnPraise(x, y) {
   const text = PRAISES[Math.floor(Math.random() * PRAISES.length)];
@@ -1424,16 +1425,31 @@ function drawPraises() {
   for (const p of praises) {
     const t = p.life;
     // Group bounce + fade phase — kicks in once every letter has landed.
-    let groupScale = 1, groupAlpha = 1, groupYOffset = 0;
+    // Group bounce + fade phase: scale POPS up to 1.2× quickly, then shrinks
+    // to 0.25× while alpha fades to 0. The whole block scales in place — no
+    // upward translation, so the text doesn't drift off its anchor.
+    let groupScale = 1, groupAlpha = 1;
     if (t > p.landEnd) {
-      const bt = (t - p.landEnd) / PRAISE_BOUNCE_DUR;   // 0..1
-      groupYOffset = -EASE.outQuad(bt) * PRAISE_BOUNCE_HEIGHT;
-      groupScale = 1 + (0.25 - 1) * bt;          // 1.0 -> 0.25 linear
-      groupAlpha = 1 - bt;
+      const bt = (t - p.landEnd) / PRAISE_BOUNCE_DUR;
+      if (bt < PRAISE_BOUNCE_POP_FRAC) {
+        // Pop phase: 1.0 -> 1.2 with outQuad easing
+        const sub = bt / PRAISE_BOUNCE_POP_FRAC;
+        groupScale = 1 + (PRAISE_BOUNCE_PEAK - 1) * EASE.outQuad(sub);
+        groupAlpha = 1;
+      } else {
+        // Shrink + fade phase: 1.2 -> 0.25 with inQuad easing
+        const sub = (bt - PRAISE_BOUNCE_POP_FRAC) / (1 - PRAISE_BOUNCE_POP_FRAC);
+        groupScale = PRAISE_BOUNCE_PEAK + (0.25 - PRAISE_BOUNCE_PEAK) * EASE.inQuad(sub);
+        groupAlpha = 1 - sub;
+      }
     }
     if (groupAlpha <= 0) continue;
     ctx.save();
-    ctx.translate(p.x, p.y + groupYOffset);
+    // Slight upward pivot offset (basePx*0.06) so the visual center of the
+    // letters sits at the rotation/scale origin — without this nudge the EM-box
+    // middle reported by textBaseline='middle' is a bit lower than where the
+    // eye reads the letter centroid, so scaling appears to drag the text upward.
+    ctx.translate(p.x, p.y + p.basePx * 0.06);
     ctx.rotate(PRAISE_ROTATION);
     ctx.scale(groupScale, groupScale);
     ctx.font = '800 ' + p.basePx + 'px system-ui, "Segoe UI", sans-serif';
