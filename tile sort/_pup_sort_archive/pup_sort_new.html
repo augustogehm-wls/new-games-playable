@@ -463,6 +463,16 @@ const GRID_OPTIONS_LANDSCAPE = [[8,5], [8,4], [8,3]];
 const MIN_CELL_W_PX = 87;   // was 130, tightened by 1.5x so smaller phones still take 3 cols
 const MIN_CELL_H_PX = 60;   // was 90, same reasoning
 
+// === Idle "breathing" effect on every puppy on the board ===
+// Tiny per-slot scale wobble: scaleX uses sin, scaleY uses cos against the
+// same time argument so they're 90° out of phase — the puppy's silhouette
+// orbits a slowly-pulsing ellipse, reading as gentle breathing. Each slot
+// has its own random phase + frequency-multiplier (see `breath` field on
+// each cell, set once in buildLevel) so the board never looks synchronized.
+// Kept VERY subtle on purpose — at 2% the eye reads it as life, not motion.
+const BREATH_FREQ = 1.9;    // base rad/s; per-slot freqMul (1.25-1.50) widens the spread
+const BREATH_AMP  = 0.010;  // ±1% scale; tuned to read as life, not motion
+
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
 // fruits, veggies, packaged goods, plush, flowers).
@@ -612,6 +622,17 @@ function buildLevel() {
           { sx: 1, sy: 1, lift: 0 },
           { sx: 1, sy: 1, lift: 0 },
           { sx: 1, sy: 1, lift: 0 },
+        ],
+        // Per-slot breathing data. Random phase + small frequency variation
+        // per slot is the JS analogue of a Unity MaterialPropertyBlock — set
+        // once at level build, read each frame, no per-frame allocations.
+        // The slot owns the rhythm; whichever puppy occupies the slot adopts
+        // it. This trades a tiny bit of physical realism (a puppy that moves
+        // changes its breath cadence) for zero gameplay state churn.
+        breath: [
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
+          { phase: Math.random() * Math.PI * 2, freqMul: 1.25 + Math.random() * 0.25 },
         ],
         stampProgress: 0,
         soldOut: false,
@@ -968,16 +989,20 @@ function drawBoard() {
             lift: cell.itemLift
           });
         } else {
-          // Slot-level squash from the landing arc (1,1,0 when at rest, so
-          // we only allocate the opts object when there's an active animation).
+          // Idle breathing: sin for X, cos for Y so the puppy's silhouette
+          // traces a soft ellipse over time. Phase + freq are unique per slot
+          // (set once in buildLevel) so the board never breathes in lockstep.
+          const br = cell.breath[s];
+          const bt = totalTime * BREATH_FREQ * br.freqMul + br.phase;
+          const breathX = 1 + Math.sin(bt) * BREATH_AMP;
+          const breathY = 1 + Math.cos(bt) * BREATH_AMP;
+          // Slot-level squash from the landing arc (multiplied with breath).
           const sl = cell.slot[s];
-          if (sl.sx !== 1 || sl.sy !== 1 || sl.lift !== 0) {
-            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
-              scaleX: sl.sx, scaleY: sl.sy, lift: sl.lift,
-            });
-          } else {
-            drawItem(id, center.x + shake, center.y, board.slotW, board.slotH);
-          }
+          drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
+            scaleX: sl.sx * breathX,
+            scaleY: sl.sy * breathY,
+            lift: sl.lift,
+          });
         }
       }
       // Pass 3: shelf floor (drawn AFTER items so the wood plank
@@ -1350,22 +1375,22 @@ function drawConfetti() {
   }
 }
 
-// === Landing squash (per-slot) ===
-// Item lands → instant squash on impact, then a single ease back to neutral
-// over 0.18s. Items in OTHER slots of the same shelf are unaffected.
+// === Landing bounce (per-slot squash & stretch) ===
+// Chains 3 short tweens on cell.slot[s] when an item lands in slot s. Total
+// runtime ~0.22s. Items in OTHER slots of the same shelf are unaffected.
 function triggerLandingBounce(c, r, s) {
   const cell = shelves[r] && shelves[r][c];
   if (!cell) return;
   const slot = cell.slot[s];
   killTweensOf(slot, ['sx', 'sy', 'lift']);
-  // Snap to a heavy pancake pose — 1.38 wider, 0.72 shorter, area-
-  // preserving (≈0.994). Then unfold with inOutCubic over 0.30s: the
-  // slow start makes the squash visually DWELL for ~90ms (jelly mass
-  // resisting), the fast middle does the actual unsquish, and the slow
-  // tail settles into neutral. NO secondary rebound up — the puppy
-  // should still look like it's settling into a cute sit.
-  slot.sx = 1.38; slot.sy = 0.72; slot.lift = 0;
-  tween(slot, { sx: 1.0, sy: 1.0, lift: 0 }, 0.30, { ease: 'inOutCubic' });
+  // Snap to the impact pose so the squash visibly starts at the floor —
+  // 1.18 wider, 0.82 shorter is roughly area-preserving and reads as a
+  // hard contact. From there the chain returns to neutral with a tiny
+  // overshoot up so the puppy feels rubbery.
+  slot.sx = 1.18; slot.sy = 0.82; slot.lift = 0;
+  tween(slot, { sx: 0.94, sy: 1.06, lift: 4 }, 0.10, { ease: 'outQuad', onComplete: () => {
+    tween(slot, { sx: 1.0, sy: 1.0, lift: 0 }, 0.10, { ease: 'outQuad' });
+  }});
 }
 
 // === Praise word popups ===
@@ -1490,51 +1515,30 @@ function onPointerUp(e) {
     typeId: d.typeId,
     x: p.x, y: p.y,
     scale: startScale,
-    sx: 1, sy: 1,  // per-axis stretch; descent tweens to a thin/tall pose
     dstR: shelfHit.r, dstC: shelfHit.c, dstS: targetSlot,
   };
   transit.push(tr);
   sfxDrop();
-  // Parabolic arc: tossed UP from the release point with outQuad
-  // (decelerates approaching the apex) then falls with inQuad
-  // (accelerates into the landing). Both eases hit zero velocity at
-  // the apex so the seam between phases is smooth, like real gravity.
-  // Apex sits slightly above where the finger let go — just enough to
-  // read as a toss, scaled with the drop distance for longer flights.
-  const arcLift = Math.max(30, Math.abs(target.y - p.y) * 0.35);
-  const peakY = p.y - arcLift;
-  const upDur = 0.12;
-  const downDur = 0.18;
-  const peakProgress = upDur / (upDur + downDur);
-  const peakX = p.x + (target.x - p.x) * peakProgress;
-  const peakScale = tr.scale + (1.0 - tr.scale) * peakProgress;
-  tween(tr, { x: peakX, y: peakY, scale: peakScale }, upDur, { ease: 'outQuad', onComplete: () => {
-    // Descent: stretch the pup vertically (taller, thinner) as it falls.
-    // The stretch tweens with the same inQuad as the position, so it
-    // builds up just as motion peaks. The next-frame snap from this
-    // stretched pose into the landing squash (1.18, 0.82) IS the impact
-    // beat — extreme stretch → extreme squash is the cartoon vocabulary
-    // that makes the bounce read as cute, not hard.
-    tween(tr, { x: target.x, y: target.y, scale: 1.0, sx: 0.88, sy: 1.14 }, downDur, { ease: 'inQuad', onComplete: () => {
-      shelves[tr.dstR][tr.dstC].items[tr.dstS] = tr.typeId;
-      const idx = transit.indexOf(tr);
-      if (idx >= 0) transit.splice(idx, 1);
-      // Landing puff at the disc's contact point on the shelf floor.
-      spawnLandingPuff(target.x, target.y + board.slotH * 0.42);
-      // Squash on the landed slot — single compression on impact then
-      // ease back to neutral. Only this slot deforms.
-      triggerLandingBounce(tr.dstC, tr.dstR, tr.dstS);
-      if (isShelfMatch(tr.dstC, tr.dstR)) triggerMatch(tr.dstC, tr.dstR);
-      else checkWin();
-    }});
+  // inOutBack: gentle pull-back at start, slight overshoot before settling
+  // — gives the drop a "flicked into place" feel.
+  tween(tr, { x: target.x, y: target.y, scale: 1.0 }, 0.22, { ease: 'inOutBack', onComplete: () => {
+    shelves[tr.dstR][tr.dstC].items[tr.dstS] = tr.typeId;
+    const idx = transit.indexOf(tr);
+    if (idx >= 0) transit.splice(idx, 1);
+    // Landing puff at the disc's contact point on the shelf floor.
+    spawnLandingPuff(target.x, target.y + board.slotH * 0.42);
+    // Squash & stretch on the landed slot — adds impact alongside the
+    // puff smoke. Compresses on impact, then a lighter rebound, then
+    // settles. Only this slot deforms; the rest of the shelf is steady.
+    triggerLandingBounce(tr.dstC, tr.dstR, tr.dstS);
+    if (isShelfMatch(tr.dstC, tr.dstR)) triggerMatch(tr.dstC, tr.dstR);
+    else checkWin();
   }});
 }
 
 function drawTransit() {
   for (const tr of transit) {
-    drawItem(tr.typeId, tr.x, tr.y, board.slotW * tr.scale, board.slotH * tr.scale, {
-      scaleX: tr.sx, scaleY: tr.sy, lift: 8 * tr.scale,
-    });
+    drawItem(tr.typeId, tr.x, tr.y, board.slotW * tr.scale, board.slotH * tr.scale, { lift: 8 * tr.scale });
   }
 }
 
@@ -1652,18 +1656,14 @@ function triggerMatch(c, r) {
   // down on top of the matched shelf, and gives it clean background sky.
   const rect = shelfRect(c, r);
   spawnPraise(rect.x + rect.w / 2, rect.y - rect.h * 0.10);
-  // Beefy squash-stretch arc — same vocabulary as the drop-landing
-  // squash (deep pancake values, inOutCubic settle) so the two
-  // animations read as one family. Area-preserving at every keyframe.
-  //   1. Anticipation squash (1.22, 0.80) — wind up
-  //   2. Jump up (0.82, 1.22) + lift 28 — celebratory hop, taller stretch
-  //   3. Landing squash (1.32, 0.76) — heavy celebratory pancake
-  //   4. Recover to neutral + fade out with inOutCubic — squash dwells
-  //      ~80ms before unfolding, matches the drop-landing's jelly feel.
-  //      STAMP slides down in parallel.
-  tween(cell, { itemSx: 1.22, itemSy: 0.80 }, 0.10, { ease: 'outQuad', onComplete: () => {
-    tween(cell, { itemSx: 0.82, itemSy: 1.22, itemLift: 28 }, 0.20, { ease: 'outQuad', onComplete: () => {
-      tween(cell, { itemSx: 1.32, itemSy: 0.76, itemLift: 0 }, 0.12, { ease: 'inQuad', onComplete: () => {
+  // Subtle bouncy squash-stretch arc, area roughly preserved:
+  //   1. Anticipation squash (slightly wider, shorter)
+  //   2. Jump up (slightly taller, thinner) + lift Y
+  //   3. Landing squash (impact)
+  //   4. Recover to neutral + fade out — STAMP slides down in parallel
+  tween(cell, { itemSx: 1.10, itemSy: 0.88 }, 0.08, { ease: 'outQuad', onComplete: () => {
+    tween(cell, { itemSx: 0.92, itemSy: 1.10, itemLift: 20 }, 0.16, { ease: 'outQuad', onComplete: () => {
+      tween(cell, { itemSx: 1.12, itemSy: 0.86, itemLift: 0 }, 0.10, { ease: 'inQuad', onComplete: () => {
         // Mark the cell as sold out NOW so input is blocked while the
         // shutter comes down; items keep rendering with itemAlpha until
         // the fade tween finishes (then we null them and flip phase).
@@ -1671,10 +1671,9 @@ function triggerMatch(c, r) {
         cell.stampProgress = 0;
         // Stamp slide-down (clipped) — runs in parallel with item fade-out.
         tween(cell, { stampProgress: 1.0 }, 0.36, { ease: 'outCubic', onComplete: checkWin });
-        // Items unfold from the landing pancake to neutral while fading
-        // to 0 alpha. inOutCubic gives the same DWELL-then-release feel
-        // as the drop landing — squash visibly holds before letting go.
-        tween(cell, { itemSx: 1.0, itemSy: 1.0, itemAlpha: 0 }, 0.26, { ease: 'inOutCubic', onComplete: () => {
+        // Items recover to neutral scale + fade to 0 alpha — appears as
+        // "settling, then dissolving" beneath the descending shutter.
+        tween(cell, { itemSx: 1.0, itemSy: 1.0, itemAlpha: 0 }, 0.22, { ease: 'outQuad', onComplete: () => {
           cell.items = [null, null, null];
           cell.phase = 'soldOut';
         }});
