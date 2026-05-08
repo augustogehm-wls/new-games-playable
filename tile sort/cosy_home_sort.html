@@ -475,10 +475,10 @@ let COLS = 4, ROWS = 8;
 // and returns the first one whose computed cellW/cellH meet the minimum
 // readable thresholds below. Total tile count tops out at 5*8 = 40, and the
 // short axis is floored at 3 (2-wide / 2-tall boards felt too sparse).
-const GRID_OPTIONS_PORTRAIT  = [[5,8], [4,8], [3,8]];
-const GRID_OPTIONS_LANDSCAPE = [[8,5], [8,4], [8,3]];
-const MIN_CELL_W_PX = 87;   // was 130, tightened by 1.5x so smaller phones still take 3 cols
-const MIN_CELL_H_PX = 60;   // was 90, same reasoning
+const GRID_OPTIONS_PORTRAIT  = [[5,12], [5,10], [4,12], [4,10], [4,8], [3,12], [3,10], [3,8]];
+const GRID_OPTIONS_LANDSCAPE = [[10,8], [10,7], [10,6], [10,5], [9,8], [9,7], [9,6], [8,9], [8,8], [8,7], [8,6], [8,5], [8,4], [8,3]];
+const MIN_CELL_W_PX = 75;   // was 87; tightened so 8-col landscape and 5-col portrait fit on phones with the wider 2.1 cell aspect
+const MIN_CELL_H_PX = 36;   // was 60; cells are now shorter to match the square cosy clothing tiles
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
@@ -643,7 +643,7 @@ function buildLevel() {
 // LAYOUT — pick the grid that fits this viewport, then size cells.
 // ============================================================
 let board = { x: 0, y: 0, cellW: 0, cellH: 0, slotW: 0, slotH: 0 };
-const CELL_ASPECT = 1.5;  // cellW / cellH ratio used everywhere
+const CELL_ASPECT = 2.1;  // cellW / cellH — wider cells so square cosy clothing tiles fill slots vertically without leaving big air gaps above/below the items
 
 // Compute cell size for a candidate (cols, rows) inside (availW, availH)
 // using the same fit rule as layoutBoard.
@@ -698,7 +698,7 @@ function layoutBoard() {
   board.cellW = cellW;
   board.cellH = cellH;
   board.slotW = cellW / SLOTS;
-  board.slotH = cellH * 0.86; // item area; rest is shelf-floor below
+  board.slotH = cellH * 0.90; // item area; rest is shelf-floor below
 }
 function shelfRect(c, r) {
   return {
@@ -903,10 +903,10 @@ function drawItem(typeId, cx, cy, w, h, opts) {
   const aspect = ATLAS_CELL_W / ATLAS_CELL_H;
   let sprW, sprH;
   if (w < h * aspect) {
-    sprW = w * 1.05;          // width-constrained — sprite as wide as the slot
+    sprW = w * 1.12;          // width-constrained — sprite as wide as the slot
     sprH = sprW / aspect;
   } else {
-    sprH = h * 1.05;          // height-constrained — sprite as tall as the slot
+    sprH = h * 1.12;          // height-constrained — sprite as tall as the slot
     sprW = sprH * aspect;
   }
   // Anchor uses the EFFECTIVE world Y-scale (bD) so the sprite bottom
