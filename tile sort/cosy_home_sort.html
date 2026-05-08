@@ -699,7 +699,7 @@ function layoutBoard() {
   board.cellH = cellH;
   board.post  = Math.max(4, cellW * 0.022);  // wood post width (also doubles as slot horizontal inset)
   board.slotW = (cellW - board.post * 2) / SLOTS;  // slot width measured INSIDE the wood posts so items pack within the inner cell area, not over the wood
-  board.slotH = cellH * 0.95; // item area; only 5% reserved for the bottom wood edge
+  board.slotH = cellH * 0.88; // item area; remaining 12% is the visible horizontal wood plank between rows
 }
 function shelfRect(c, r) {
   return {
@@ -737,56 +737,41 @@ function drawShelfBack(c, r) {
   const post = board.post;
   const slotH = board.slotH;
 
-  // === OUTER VERTICAL POSTS — narrow wood dividers between cells ===
-  const leftG = ctx.createLinearGradient(rect.x, 0, rect.x + post, 0);
-  leftG.addColorStop(0,    '#d8b380');
-  leftG.addColorStop(0.55, '#a87a4d');
-  leftG.addColorStop(1,    '#6b4520');
-  ctx.fillStyle = leftG;
-  ctx.fillRect(rect.x, rect.y, post, rect.h);
-
-  const rightG = ctx.createLinearGradient(rect.x + rect.w - post, 0, rect.x + rect.w, 0);
-  rightG.addColorStop(0,    '#6b4520');
-  rightG.addColorStop(0.45, '#a87a4d');
-  rightG.addColorStop(1,    '#d8b380');
-  ctx.fillStyle = rightG;
+  // === VERTICAL WOOD POSTS — flat mid-tone wood, no horizontal gradient.
+  // When two adjacent cells meet, the right post of cell A and the left
+  // post of cell B share the same colour, so they read as ONE continuous
+  // wooden divider. The faint vertical gradient (top a touch darker than
+  // bottom) ties them visually to the floor band beneath. ===
+  const postG = ctx.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
+  postG.addColorStop(0.00, '#6b4520');   // darker at the top (in shadow of overhang)
+  postG.addColorStop(0.55, '#8b5e2c');   // mid wood
+  postG.addColorStop(1.00, '#7a4f24');   // marginally darker at the bottom
+  ctx.fillStyle = postG;
+  ctx.fillRect(rect.x,                rect.y, post, rect.h);
   ctx.fillRect(rect.x + rect.w - post, rect.y, post, rect.h);
 
-  // === INNER FACE — TWO flat lighting layers, physically motivated.
-  // Light source is overhead (the warm room ambient).
-  //   TOP layer  = downward-facing surface (overhang/ceiling) → picks up
-  //                almost no direct light. Stays dark and roughly uniform.
-  //   BOTTOM layer = upward-facing surface (floor) → catches the most
-  //                light at the FRONT (closest to viewer, no overhang
-  //                above), darker at the back where the overhang shades
-  //                it. So the floor gradient is bright-at-bottom,
-  //                darker-toward-top.
+  // === INNER FACE — two flat lighting layers, physical model: overhead
+  // light, top is downward-facing (dark uniform), bottom is upward-facing
+  // (brightest at the front edge). ===
   const ix = rect.x + post;
   const iw = rect.w - post * 2;
-  const split = slotH * 0.42;  // top portion (overhang) is the smaller of the two — most of the cell is the lit floor
+  const split = slotH * 0.42;
 
-  // TOP / overhang — uniformly dark wood with very gentle variation
-  // (a hint of warmth bouncing back from the lit floor below).
   const topG = ctx.createLinearGradient(0, rect.y, 0, rect.y + split);
-  topG.addColorStop(0.00, '#5a3819');   // medium-dark wood at the very top
-  topG.addColorStop(0.50, '#6b4520');   // marginally warmer mid
-  topG.addColorStop(1.00, '#7a4f24');   // tiny lift toward the seam from bounced light
+  topG.addColorStop(0.00, '#5a3819');
+  topG.addColorStop(0.50, '#6b4520');
+  topG.addColorStop(1.00, '#7a4f24');
   ctx.fillStyle = topG;
   ctx.fillRect(ix, rect.y, iw, split);
 
-  // BOTTOM / floor — DARK at the top (shaded by overhang), BRIGHT cream
-  // at the bottom front (catches the most direct light).
   const floorG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + slotH);
-  floorG.addColorStop(0.00, '#7a4f24');   // dark at the back where overhang shades it (matches seam)
-  floorG.addColorStop(0.30, '#b88553');   // warming up
-  floorG.addColorStop(0.65, '#e3b87e');   // warm wood
-  floorG.addColorStop(1.00, '#fce0ac');   // bright cream at the front edge (most light)
+  floorG.addColorStop(0.00, '#7a4f24');
+  floorG.addColorStop(0.30, '#b88553');
+  floorG.addColorStop(0.65, '#e3b87e');
+  floorG.addColorStop(1.00, '#fce0ac');
   ctx.fillStyle = floorG;
   ctx.fillRect(ix, rect.y + split, iw, slotH - split);
 
-  // Subtle seam shadow at the back of the floor — a soft horizontal AO
-  // band so the eye reads ''top surface meets bottom surface'' even though
-  // both sides of the seam are similar in tone.
   const seamH = Math.max(2, slotH * 0.05);
   const seamG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + split + seamH);
   seamG.addColorStop(0.0, 'rgba(40, 22, 8, 0.28)');
@@ -794,8 +779,7 @@ function drawShelfBack(c, r) {
   ctx.fillStyle = seamG;
   ctx.fillRect(ix, rect.y + split, iw, seamH);
 
-  // Thin specular highlight along the very front edge of the floor — a
-  // bright lip catching room light, similar to a polished wood plank.
+  // Specular highlight along the very front of the floor.
   ctx.fillStyle = 'rgba(255, 240, 210, 0.35)';
   ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.025), iw, Math.max(1, slotH * 0.025));
 }
@@ -806,18 +790,26 @@ function drawShelfFloor(c, r) {
   const floorH = rect.h - board.slotH;
   if (floorH < 1) return;
 
-  // Thin warm wood band that doubles as the visual ''bottom edge''
-  // of the shelf. No more brushed-metal display lip — just a small
-  // wood transition between rows so cells read as separate.
+  // Continuous horizontal wood plank between rows. Same gradient applied
+  // for every cell in the row -> reads as ONE long wood shelf board.
+  // - Thin warm highlight along the very top edge (catching room light)
+  // - Warm-wood mid body
+  // - Darker bottom (drop shadow into the cell below)
   const g = ctx.createLinearGradient(0, floorY, 0, floorY + floorH);
-  g.addColorStop(0,    '#a87a4d');
-  g.addColorStop(1,    '#5a3819');
+  g.addColorStop(0.00, '#e3b87e');   // top edge — wood top catches the light
+  g.addColorStop(0.18, '#b88553');   // warm wood
+  g.addColorStop(0.65, '#8b5e2c');   // body
+  g.addColorStop(1.00, '#3c220e');   // dark shadow at the bottom edge
   ctx.fillStyle = g;
   ctx.fillRect(rect.x, floorY, rect.w, floorH);
 
-  // Bottom shadow under the wood band.
-  ctx.fillStyle = 'rgba(20, 10, 5, 0.50)';
-  ctx.fillRect(rect.x, floorY + floorH - Math.max(1, floorH * 0.18), rect.w, Math.max(1, floorH * 0.18));
+  // Crisp 1px highlight along the very top — sells ''this is a wood plank''.
+  ctx.fillStyle = 'rgba(255, 230, 190, 0.55)';
+  ctx.fillRect(rect.x, floorY, rect.w, 1);
+
+  // Crisp 1px shadow line right below the highlight — emphasises the plank''s top face.
+  ctx.fillStyle = 'rgba(40, 22, 8, 0.30)';
+  ctx.fillRect(rect.x, floorY + 1, rect.w, 1);
 }
 
 // Render a puppy: floor shadow (axis-aligned, never rotated/scaled), then
@@ -878,10 +870,10 @@ function drawItem(typeId, cx, cy, w, h, opts) {
   const aspect = ATLAS_CELL_W / ATLAS_CELL_H;
   let sprW, sprH;
   if (w < h * aspect) {
-    sprW = w * 1.10;          // width-constrained — sprite as wide as the slot
+    sprW = w * 1.06;          // width-constrained — sprite as wide as the slot
     sprH = sprW / aspect;
   } else {
-    sprH = h * 1.10;          // height-constrained — sprite as tall as the slot
+    sprH = h * 1.06;          // height-constrained — sprite as tall as the slot
     sprW = sprH * aspect;
   }
   // Anchor uses the EFFECTIVE world Y-scale (bD) so the sprite bottom
@@ -1018,11 +1010,11 @@ function drawPawPanel(c, r) {
   if (cell.stampProgress <= 0.0001 && !cell.soldOut) return;
   if (!closedImgReady) return;
   const rect = shelfRect(c, r);
-  const inset = Math.max(2, rect.w * 0.018);
+  const inset = board.post;          // align with the wood posts so the panel meets them flush
   const px = rect.x + inset;
   const pw = rect.w - inset * 2;
-  const ph = board.slotH - 2;                 // back-wall only (no floor)
-  const finalY = rect.y + 1;
+  const ph = rect.h;                   // FULL cell height (was slotH - 2; that left empty wood around the panel)
+  const finalY = rect.y;               // panel top sits flush with cell top
   const py = finalY + (1 - cell.stampProgress) * -rect.h;
 
   ctx.save();
