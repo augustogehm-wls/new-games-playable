@@ -642,7 +642,7 @@ function buildLevel() {
 // ============================================================
 // LAYOUT — pick the grid that fits this viewport, then size cells.
 // ============================================================
-let board = { x: 0, y: 0, cellW: 0, cellH: 0, slotW: 0, slotH: 0 };
+let board = { x: 0, y: 0, cellW: 0, cellH: 0, slotW: 0, slotH: 0, post: 0 };
 const CELL_ASPECT = 2.4;  // cellW / cellH — wider cells so square cosy clothing tiles fully fill slots vertically and pack tightly horizontally
 
 // Compute cell size for a candidate (cols, rows) inside (availW, availH)
@@ -697,7 +697,8 @@ function layoutBoard() {
   board.y = padTop + (availH - totalH) / 2;
   board.cellW = cellW;
   board.cellH = cellH;
-  board.slotW = cellW / SLOTS;
+  board.post  = Math.max(4, cellW * 0.022);  // wood post width (also doubles as slot horizontal inset)
+  board.slotW = (cellW - board.post * 2) / SLOTS;  // slot width measured INSIDE the wood posts so items pack within the inner cell area, not over the wood
   board.slotH = cellH * 0.95; // item area; only 5% reserved for the bottom wood edge
 }
 function shelfRect(c, r) {
@@ -710,7 +711,7 @@ function shelfRect(c, r) {
 }
 function slotCenter(c, r, s) {
   return {
-    x: board.x + c * board.cellW + (s + 0.5) * board.slotW,
+    x: board.x + c * board.cellW + board.post + (s + 0.5) * board.slotW,
     y: board.y + r * board.cellH + board.slotH * 0.5,
   };
 }
@@ -733,12 +734,10 @@ function drawBackground() {
 
 function drawShelfBack(c, r) {
   const rect = shelfRect(c, r);
-  const post = Math.max(4, rect.w * 0.030);  // thin wooden vertical posts (cell separators)
+  const post = board.post;  // wood post width (matches slot inset)
   const slotH = board.slotH;
 
-  // === OUTER VERTICAL POSTS — narrow wood dividers between cells. Slightly
-  // thinner than before so cells feel less ''boxed in'' and items can pack
-  // visually tighter across the row. ===
+  // === OUTER VERTICAL POSTS — narrow wood dividers between cells ===
   const leftG = ctx.createLinearGradient(rect.x, 0, rect.x + post, 0);
   leftG.addColorStop(0,    '#d8b380');
   leftG.addColorStop(0.55, '#a87a4d');
@@ -753,25 +752,44 @@ function drawShelfBack(c, r) {
   ctx.fillStyle = rightG;
   ctx.fillRect(rect.x + rect.w - post, rect.y, post, rect.h);
 
-  // === INNER FACE — single smooth vertical gradient, no flat back wall,
-  // no inner side walls, no separate ceiling. Reads as a soft niche shadow
-  // above the items merging into a cream rest area, with a warm wood
-  // band at the bottom that doubles as the shelf floor edge. ===
+  // === INNER FACE — TWO flat lighting layers (no 3D box, just a tonal
+  // shift between the upper ''back'' surface and the lower ''floor''
+  // surface, each with its own light direction). ===
   const ix = rect.x + post;
   const iw = rect.w - post * 2;
-  const innerG = ctx.createLinearGradient(0, rect.y, 0, rect.y + slotH);
-  innerG.addColorStop(0.00, '#7a4f24');   // top: deep wood shadow (overhang from cell above)
-  innerG.addColorStop(0.18, '#b88553');   // mid-wood transition
-  innerG.addColorStop(0.45, '#f5e3c0');   // cream — items sit against this
-  innerG.addColorStop(0.75, '#fff2d8');   // brightest cream where the items rest
-  innerG.addColorStop(1.00, '#d8b380');   // warm wood at bottom edge
-  ctx.fillStyle = innerG;
-  ctx.fillRect(ix, rect.y, iw, slotH);
+  const split = slotH * 0.62;  // where back meets floor
 
-  // Subtle bottom-edge shadow so items appear to sit ON the warm wood band
-  // rather than floating in front of it.
-  ctx.fillStyle = 'rgba(60, 30, 12, 0.22)';
-  ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.018), iw, Math.max(1, slotH * 0.018));
+  // BACK layer — vertical surface, lit softly from above. Top is shadowed
+  // (overhang from the cell above), middle/bottom catches the most light.
+  const backG = ctx.createLinearGradient(0, rect.y, 0, rect.y + split);
+  backG.addColorStop(0.00, '#7a4f24');   // deep top shadow
+  backG.addColorStop(0.40, '#c9a070');   // mid wood
+  backG.addColorStop(1.00, '#fbe5c0');   // brightest cream right at the floor seam
+  ctx.fillStyle = backG;
+  ctx.fillRect(ix, rect.y, iw, split);
+
+  // FLOOR layer — horizontal surface, brightest at the back where it meets
+  // the back wall, gradually warming/darkening toward the front edge.
+  const floorG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + slotH);
+  floorG.addColorStop(0.00, '#f0cf95');   // bright cream at the back
+  floorG.addColorStop(0.55, '#d8a76d');   // warm wood mid
+  floorG.addColorStop(1.00, '#a87649');   // slightly darker warm tan at the front
+  ctx.fillStyle = floorG;
+  ctx.fillRect(ix, rect.y + split, iw, slotH - split);
+
+  // Subtle seam shadow where the back wall casts onto the floor — gives the
+  // two layers a clear separation without resorting to a hard 3D edge.
+  const seamH = Math.max(2, slotH * 0.05);
+  const seamG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + split + seamH);
+  seamG.addColorStop(0.0, 'rgba(60, 30, 12, 0.32)');
+  seamG.addColorStop(1.0, 'rgba(60, 30, 12, 0.00)');
+  ctx.fillStyle = seamG;
+  ctx.fillRect(ix, rect.y + split, iw, seamH);
+
+  // Front edge of the floor — soft dark band so items appear to sit on a
+  // distinct surface rather than blending into the wood post below.
+  ctx.fillStyle = 'rgba(60, 30, 12, 0.18)';
+  ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.020), iw, Math.max(1, slotH * 0.020));
 }
 
 function drawShelfFloor(c, r) {
@@ -852,10 +870,10 @@ function drawItem(typeId, cx, cy, w, h, opts) {
   const aspect = ATLAS_CELL_W / ATLAS_CELL_H;
   let sprW, sprH;
   if (w < h * aspect) {
-    sprW = w * 1.18;          // width-constrained — sprite as wide as the slot
+    sprW = w * 1.10;          // width-constrained — sprite as wide as the slot
     sprH = sprW / aspect;
   } else {
-    sprH = h * 1.18;          // height-constrained — sprite as tall as the slot
+    sprH = h * 1.10;          // height-constrained — sprite as tall as the slot
     sprW = sprH * aspect;
   }
   // Anchor uses the EFFECTIVE world Y-scale (bD) so the sprite bottom
@@ -868,11 +886,21 @@ function drawItem(typeId, cx, cy, w, h, opts) {
 
   // Drop shadow on the floor (never rotated or scaled with the sprite).
   // Width follows the world X-scale (a) so the shadow widens when the
-  // dog is fatter horizontally regardless of stretch axis.
+  // item is fatter horizontally regardless of stretch axis. Clipped to
+  // the current cell so it never leaks onto the cell below.
+  const _cellC = Math.floor((cx - board.x) / board.cellW);
+  const _cellR = Math.floor((cy - board.y) / board.cellH);
+  const _cellRX = board.x + _cellC * board.cellW;
+  const _cellRY = board.y + _cellR * board.cellH;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(_cellRX, _cellRY, board.cellW, board.cellH);
+  ctx.clip();
   ctx.fillStyle = 'rgba(0,0,0,' + (0.24 + lift / Math.max(1,h) * 0.15) + ')';
   ctx.beginPath();
-  ctx.ellipse(cx, baseY + 2 + lift * 0.05, w * 0.32 * Math.max(0.6, a), h * 0.07, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, baseY + 2 + lift * 0.05, w * 0.32 * Math.max(0.6, a), h * 0.06, 0, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 
   // Sprite drawn from the atlas. Transform sequence:
   //   T(cx, anchorY) · M_dampened · R(rot)
@@ -1138,7 +1166,7 @@ function hitSlot(px, py) {
   const lx = cx - c * board.cellW;
   const ly = cy - r * board.cellH;
   if (ly > board.slotH) return null;
-  const s = Math.min(SLOTS - 1, Math.max(0, Math.floor(lx / board.slotW)));
+  const s = Math.min(SLOTS - 1, Math.max(0, Math.floor((lx - board.post) / board.slotW)));
   return { c, r, s };
 }
 
@@ -1416,7 +1444,7 @@ function onPointerUp(e) {
   const ly = cy - shelfHit.r * board.cellH;
   if (ly >= 0 && ly <= board.slotH) {
     const lx = cx - shelfHit.c * board.cellW;
-    const s = Math.min(SLOTS - 1, Math.max(0, Math.floor(lx / board.slotW)));
+    const s = Math.min(SLOTS - 1, Math.max(0, Math.floor((lx - board.post) / board.slotW)));
     if (dst.items[s] == null) targetSlot = s;
   }
   if (targetSlot < 0) {
@@ -1923,4 +1951,4 @@ if (location.search.indexOf('debug') >= 0) {
 })();
 </script>
 </body>
-</html>
+  const s = Math.min(SLOTS - 1, Math.max(0, Math.floor((lx - board.post) / board.slotW)));
