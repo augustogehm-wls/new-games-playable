@@ -963,9 +963,19 @@ function drawBoard() {
         if (drag && drag.fromR === r && drag.fromC === c && drag.fromS === s) continue;
         const center = slotCenter(c, r, s);
         if (matching) {
+          // Layer the per-slot landing squash ON TOP of the cell-level
+          // match anim. Slots 0/1 have slot.sx = 1 so they're unaffected;
+          // only the slot whose landing TRIGGERED the match still has an
+          // active slot tween (sx/sy != 1), and it'll show the landing
+          // splat compounded with the match arc. Without this, the third
+          // item visibly skips the landing squash because the matching
+          // render path otherwise ignores `cell.slot[s]`.
+          const sl = cell.slot[s];
           drawItem(id, center.x + shake, center.y, board.slotW, board.slotH, {
-            scaleX: cell.itemSx, scaleY: cell.itemSy, alpha: cell.itemAlpha,
-            lift: cell.itemLift
+            scaleX: cell.itemSx * sl.sx,
+            scaleY: cell.itemSy * sl.sy,
+            alpha: cell.itemAlpha,
+            lift: cell.itemLift + sl.lift,
           });
         } else {
           // Slot-level squash from the landing arc (1,1,0 when at rest, so
@@ -1358,14 +1368,15 @@ function triggerLandingBounce(c, r, s) {
   if (!cell) return;
   const slot = cell.slot[s];
   killTweensOf(slot, ['sx', 'sy', 'lift']);
-  // Snap to a heavy pancake pose — 1.38 wider, 0.72 shorter, area-
-  // preserving (≈0.994). Then unfold with inOutCubic over 0.30s: the
-  // slow start makes the squash visually DWELL for ~90ms (jelly mass
-  // resisting), the fast middle does the actual unsquish, and the slow
-  // tail settles into neutral. NO secondary rebound up — the puppy
-  // should still look like it's settling into a cute sit.
-  slot.sx = 1.38; slot.sy = 0.72; slot.lift = 0;
-  tween(slot, { sx: 1.0, sy: 1.0, lift: 0 }, 0.30, { ease: 'inOutCubic' });
+  // Snap to a moderate pancake pose — 1.30 wider, 0.78 shorter,
+  // area-preserving (≈1.014). Then unfold with inOutCubic over
+  // 0.18s: the slow start of the curve still gives a brief DWELL at
+  // peak compression (~50ms) before the unsquish, but the total time
+  // is short enough that the animation reads as snappy, not heavy.
+  // NO secondary rebound up — the puppy should still look like it's
+  // settling into a cute sit.
+  slot.sx = 1.30; slot.sy = 0.78; slot.lift = 0;
+  tween(slot, { sx: 1.0, sy: 1.0, lift: 0 }, 0.18, { ease: 'inOutCubic' });
 }
 
 // === Praise word popups ===
