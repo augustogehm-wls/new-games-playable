@@ -1379,66 +1379,125 @@ function triggerLandingBounce(c, r, s) {
 }
 
 // === Praise word popups ===
-// On every match, a short praise word ("Amazing!", "Lovely!"…) pops up at
-// the matched shelf's centre, scales up with a slight overshoot, and fades
-// out drifting upward. Pure cosmetic — does not gate any game state.
+// On every match, a short praise word ("Boarding!", "Cleared!"…) pops up at the
+// matched shelf's centre. Each LETTER lands one after another (stagger),
+// scaling from 2× to 1× while its alpha rises 0→1. Once every letter has
+// landed, the whole word bounces upward while shrinking to 0.25× and fading
+// out. The word is also rotated -15° for a playful tilt.
+// Per-letter geometry is measured ONCE at spawn time and cached on the
+// popup, so the per-frame work is just transforms + draws (no font lookups
+// or measureText calls in the hot path).
 const PRAISES = ['Ready!', 'Cleared!', 'On Time!', 'Approved!', 'Nice!', 'Boarding!'];
+const PRAISE_ROTATION  = -0.262;   // -15° in radians
+const PRAISE_LETTER_STAGGER = 0.045;  // seconds between consecutive letter spawns
+const PRAISE_LETTER_DUR     = 0.26;   // seconds for one letter's land tween
+const PRAISE_BOUNCE_DUR     = 0.42;   // seconds for the group bounce + fade-out
+const PRAISE_BOUNCE_PEAK    = 1.20;   // peak scale of the pop bounce before the shrink
+const PRAISE_BOUNCE_POP_FRAC = 0.22;   // fraction of BOUNCE_DUR spent on the upward pop (1.0 -> 1.2)
 const praises = [];
 function spawnPraise(x, y) {
+  const text = PRAISES[Math.floor(Math.random() * PRAISES.length)];
+  const basePx = Math.round(board.slotH * 0.55);
+  // Measure each letter once, build a cached layout. We have to set the
+  // font on ctx before measureText — that's fine, we'll restore at the end.
+  ctx.save();
+  ctx.font = '800 ' + basePx + 'px system-ui, "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const letters = [];
+  let totalW = 0;
+  for (const ch of text) {
+    const w = ctx.measureText(ch).width;
+    letters.push({ char: ch, w: w, offsetX: 0 });
+    totalW += w;
+  }
+  // Center each letter horizontally around (0, 0) of the group transform.
+  let cursor = -totalW / 2;
+  for (const l of letters) {
+    l.offsetX = cursor + l.w / 2;
+    cursor += l.w;
+  }
+  ctx.restore();
+  const landEnd = (letters.length - 1) * PRAISE_LETTER_STAGGER + PRAISE_LETTER_DUR;
   praises.push({
-    x, y,
-    text: PRAISES[Math.floor(Math.random() * PRAISES.length)],
-    scale: 0.4,
-    alpha: 0,
-    vy: -32,
-    life: 0,
-    maxLife: 0.95,
-    // Pick a warm hue per popup so the screen feels alive over many matches.
+    x: x, y: y,
+    text: text,
+    letters: letters,
+    basePx: basePx,
     hue: 24 + Math.random() * 24,   // 24°–48° = orange/amber
+    landEnd: landEnd,
+    life: 0,
+    maxLife: landEnd + PRAISE_BOUNCE_DUR,
   });
 }
 function updatePraises(dt) {
   for (let i = praises.length - 1; i >= 0; i--) {
     const p = praises[i];
     p.life += dt;
-    p.y += p.vy * dt;
-    p.vy *= Math.exp(-dt * 1.6);   // decelerate the upward drift
-    const t = p.life / p.maxLife;
-    if (t < 0.18) {
-      p.scale = lerp(0.4, 1.30, EASE.outBack(t / 0.18));
-    } else if (t < 0.42) {
-      p.scale = lerp(1.30, 1.00, EASE.outQuad((t - 0.18) / 0.24));
-    } else {
-      p.scale = 1.00;
-    }
-    if (t < 0.10) p.alpha = t / 0.10;
-    else if (t < 0.65) p.alpha = 1.0;
-    else p.alpha = Math.max(0, 1.0 - (t - 0.65) / 0.35);
     if (p.life >= p.maxLife) praises.splice(i, 1);
   }
 }
 function drawPraises() {
   if (!praises.length) return;
-  // Set the heavy state ONCE for the whole batch — font lookup is one of the
-  // pricier ctx operations, so we choose a fixed base size and scale into it
-  // via ctx.scale() per praise instead of mutating the font string each frame.
-  const basePx = Math.round(board.slotH * 0.55);
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '800 ' + basePx + 'px system-ui, "Segoe UI", sans-serif';
   ctx.lineJoin = 'round';
-  ctx.lineWidth = Math.max(3, basePx * 0.16);
-  ctx.strokeStyle = 'rgba(70, 35, 8, 0.85)';
   for (const p of praises) {
-    if (p.alpha <= 0) continue;
+    const t = p.life;
+    // Group bounce + fade phase — kicks in once every letter has landed.
+    // Group bounce + fade phase: scale POPS up to 1.2× quickly, then shrinks
+    // to 0.25× while alpha fades to 0. The whole block scales in place — no
+    // upward translation, so the text doesn't drift off its anchor.
+    let groupScale = 1, groupAlpha = 1;
+    if (t > p.landEnd) {
+      const bt = (t - p.landEnd) / PRAISE_BOUNCE_DUR;
+      if (bt < PRAISE_BOUNCE_POP_FRAC) {
+        // Pop phase: 1.0 -> 1.2 with outQuad easing
+        const sub = bt / PRAISE_BOUNCE_POP_FRAC;
+        groupScale = 1 + (PRAISE_BOUNCE_PEAK - 1) * EASE.outQuad(sub);
+        groupAlpha = 1;
+      } else {
+        // Shrink + fade phase: 1.2 -> 0.25 with inQuad easing
+        const sub = (bt - PRAISE_BOUNCE_POP_FRAC) / (1 - PRAISE_BOUNCE_POP_FRAC);
+        groupScale = PRAISE_BOUNCE_PEAK + (0.25 - PRAISE_BOUNCE_PEAK) * EASE.inQuad(sub);
+        groupAlpha = 1 - sub;
+      }
+    }
+    if (groupAlpha <= 0) continue;
     ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.scale(p.scale, p.scale);
-    ctx.globalAlpha = p.alpha;
-    ctx.strokeText(p.text, 0, 0);
+    // Slight upward pivot offset (basePx*0.06) so the visual center of the
+    // letters sits at the rotation/scale origin — without this nudge the EM-box
+    // middle reported by textBaseline='middle' is a bit lower than where the
+    // eye reads the letter centroid, so scaling appears to drag the text upward.
+    ctx.translate(p.x, p.y + p.basePx * 0.06);
+    ctx.rotate(PRAISE_ROTATION);
+    ctx.scale(groupScale, groupScale);
+    ctx.font = '800 ' + p.basePx + 'px system-ui, "Segoe UI", sans-serif';
+    ctx.lineWidth = Math.max(3, p.basePx * 0.16);
+    ctx.strokeStyle = 'rgba(70, 35, 8, 0.85)';
     ctx.fillStyle = 'hsl(' + p.hue + ', 95%, 65%)';
-    ctx.fillText(p.text, 0, 0);
+    // Per-letter land animation
+    const inLand = t < p.landEnd;
+    for (let i = 0; i < p.letters.length; i++) {
+      const l = p.letters[i];
+      let letterScale = 1, letterAlpha = 1;
+      if (inLand) {
+        const lt = (t - i * PRAISE_LETTER_STAGGER) / PRAISE_LETTER_DUR;
+        if (lt < 0) continue;        // letter hasn't started yet — skip
+        if (lt < 1) {
+          letterScale = 2 + (1 - 2) * EASE.outBack(lt);  // 2.0 -> 1.0 with overshoot
+          letterAlpha = Math.min(1, lt * 2.5);            // alpha rises faster than scale
+        }
+      }
+      ctx.save();
+      ctx.translate(l.offsetX, 0);
+      ctx.scale(letterScale, letterScale);
+      ctx.globalAlpha = letterAlpha * groupAlpha;
+      ctx.strokeText(l.char, 0, 0);
+      ctx.fillText(l.char, 0, 0);
+      ctx.restore();
+    }
     ctx.restore();
   }
   ctx.restore();
