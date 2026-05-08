@@ -906,7 +906,7 @@ function drawItem(typeId, cx, cy, w, h, opts) {
   ctx.clip();
   ctx.fillStyle = 'rgba(0,0,0,' + (0.24 + lift / Math.max(1,h) * 0.15) + ')';
   ctx.beginPath();
-  ctx.ellipse(cx, baseY + 2 + lift * 0.05, w * 0.32 * Math.max(0.6, a), h * 0.06, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, (cy + h * 0.5 - sprH * 0.08) + lift * 0.05, sprW * 0.42 * Math.max(0.6, a), Math.max(2.5, h * 0.08), 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
