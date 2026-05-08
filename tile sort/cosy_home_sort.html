@@ -734,7 +734,7 @@ function drawBackground() {
 
 function drawShelfBack(c, r) {
   const rect = shelfRect(c, r);
-  const post = board.post;  // wood post width (matches slot inset)
+  const post = board.post;
   const slotH = board.slotH;
 
   // === OUTER VERTICAL POSTS — narrow wood dividers between cells ===
@@ -752,44 +752,52 @@ function drawShelfBack(c, r) {
   ctx.fillStyle = rightG;
   ctx.fillRect(rect.x + rect.w - post, rect.y, post, rect.h);
 
-  // === INNER FACE — TWO flat lighting layers (no 3D box, just a tonal
-  // shift between the upper ''back'' surface and the lower ''floor''
-  // surface, each with its own light direction). ===
+  // === INNER FACE — TWO flat lighting layers, physically motivated.
+  // Light source is overhead (the warm room ambient).
+  //   TOP layer  = downward-facing surface (overhang/ceiling) → picks up
+  //                almost no direct light. Stays dark and roughly uniform.
+  //   BOTTOM layer = upward-facing surface (floor) → catches the most
+  //                light at the FRONT (closest to viewer, no overhang
+  //                above), darker at the back where the overhang shades
+  //                it. So the floor gradient is bright-at-bottom,
+  //                darker-toward-top.
   const ix = rect.x + post;
   const iw = rect.w - post * 2;
-  const split = slotH * 0.62;  // where back meets floor
+  const split = slotH * 0.42;  // top portion (overhang) is the smaller of the two — most of the cell is the lit floor
 
-  // BACK layer — vertical surface, lit softly from above. Top is shadowed
-  // (overhang from the cell above), middle/bottom catches the most light.
-  const backG = ctx.createLinearGradient(0, rect.y, 0, rect.y + split);
-  backG.addColorStop(0.00, '#7a4f24');   // deep top shadow
-  backG.addColorStop(0.40, '#c9a070');   // mid wood
-  backG.addColorStop(1.00, '#fbe5c0');   // brightest cream right at the floor seam
-  ctx.fillStyle = backG;
+  // TOP / overhang — uniformly dark wood with very gentle variation
+  // (a hint of warmth bouncing back from the lit floor below).
+  const topG = ctx.createLinearGradient(0, rect.y, 0, rect.y + split);
+  topG.addColorStop(0.00, '#5a3819');   // medium-dark wood at the very top
+  topG.addColorStop(0.50, '#6b4520');   // marginally warmer mid
+  topG.addColorStop(1.00, '#7a4f24');   // tiny lift toward the seam from bounced light
+  ctx.fillStyle = topG;
   ctx.fillRect(ix, rect.y, iw, split);
 
-  // FLOOR layer — horizontal surface, brightest at the back where it meets
-  // the back wall, gradually warming/darkening toward the front edge.
+  // BOTTOM / floor — DARK at the top (shaded by overhang), BRIGHT cream
+  // at the bottom front (catches the most direct light).
   const floorG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + slotH);
-  floorG.addColorStop(0.00, '#f0cf95');   // bright cream at the back
-  floorG.addColorStop(0.55, '#d8a76d');   // warm wood mid
-  floorG.addColorStop(1.00, '#a87649');   // slightly darker warm tan at the front
+  floorG.addColorStop(0.00, '#7a4f24');   // dark at the back where overhang shades it (matches seam)
+  floorG.addColorStop(0.30, '#b88553');   // warming up
+  floorG.addColorStop(0.65, '#e3b87e');   // warm wood
+  floorG.addColorStop(1.00, '#fce0ac');   // bright cream at the front edge (most light)
   ctx.fillStyle = floorG;
   ctx.fillRect(ix, rect.y + split, iw, slotH - split);
 
-  // Subtle seam shadow where the back wall casts onto the floor — gives the
-  // two layers a clear separation without resorting to a hard 3D edge.
+  // Subtle seam shadow at the back of the floor — a soft horizontal AO
+  // band so the eye reads ''top surface meets bottom surface'' even though
+  // both sides of the seam are similar in tone.
   const seamH = Math.max(2, slotH * 0.05);
   const seamG = ctx.createLinearGradient(0, rect.y + split, 0, rect.y + split + seamH);
-  seamG.addColorStop(0.0, 'rgba(60, 30, 12, 0.32)');
-  seamG.addColorStop(1.0, 'rgba(60, 30, 12, 0.00)');
+  seamG.addColorStop(0.0, 'rgba(40, 22, 8, 0.28)');
+  seamG.addColorStop(1.0, 'rgba(40, 22, 8, 0.00)');
   ctx.fillStyle = seamG;
   ctx.fillRect(ix, rect.y + split, iw, seamH);
 
-  // Front edge of the floor — soft dark band so items appear to sit on a
-  // distinct surface rather than blending into the wood post below.
-  ctx.fillStyle = 'rgba(60, 30, 12, 0.18)';
-  ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.020), iw, Math.max(1, slotH * 0.020));
+  // Thin specular highlight along the very front edge of the floor — a
+  // bright lip catching room light, similar to a polished wood plank.
+  ctx.fillStyle = 'rgba(255, 240, 210, 0.35)';
+  ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.025), iw, Math.max(1, slotH * 0.025));
 }
 
 function drawShelfFloor(c, r) {
