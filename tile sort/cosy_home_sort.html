@@ -1025,7 +1025,10 @@ function drawPawPanel(c, r) {
   ctx.clip();
 
   // Texture — single stretched blit covering the back-wall area only.
-  ctx.drawImage(closedImg, px, py, pw, ph);
+  // Source-rect drawImage: only the visible (non-transparent) bbox of the PNG
+  // is stretched to fill the cell, otherwise the ~10% transparent top/bottom
+  // padding from the rounded corners would leak cell wood through the panel.
+  ctx.drawImage(closedImg, 47, 44, 913, 329, px, py, pw, ph);
 
   // Top inner shadow — same trick as the old shutter to sell "panel
   // in front of the items".
