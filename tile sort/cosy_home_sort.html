@@ -1013,7 +1013,7 @@ function drawPawPanel(c, r) {
   const inset = board.post;          // align with the wood posts so the panel meets them flush
   const px = rect.x + inset;
   const pw = rect.w - inset * 2;
-  const ph = rect.h;                   // FULL cell height (was slotH - 2; that left empty wood around the panel)
+  const ph = board.slotH;            // panel covers the back-wall area only — stops at the horizontal wood plank below
   const finalY = rect.y;               // panel top sits flush with cell top
   const py = finalY + (1 - cell.stampProgress) * -rect.h;
 
