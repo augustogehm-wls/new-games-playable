@@ -478,7 +478,7 @@ let COLS = 4, ROWS = 8;
 const GRID_OPTIONS_PORTRAIT  = [[5,12], [5,10], [4,12], [4,10], [4,8], [3,12], [3,10], [3,8]];
 const GRID_OPTIONS_LANDSCAPE = [[10,8], [10,7], [10,6], [10,5], [9,8], [9,7], [9,6], [8,9], [8,8], [8,7], [8,6], [8,5], [8,4], [8,3]];
 const MIN_CELL_W_PX = 75;   // was 87; tightened so 8-col landscape and 5-col portrait fit on phones with the wider 2.1 cell aspect
-const MIN_CELL_H_PX = 36;   // was 60; cells are now shorter to match the square cosy clothing tiles
+const MIN_CELL_H_PX = 32;   // was 60; cells are now shorter to match the square cosy clothing tiles
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
@@ -643,7 +643,7 @@ function buildLevel() {
 // LAYOUT — pick the grid that fits this viewport, then size cells.
 // ============================================================
 let board = { x: 0, y: 0, cellW: 0, cellH: 0, slotW: 0, slotH: 0 };
-const CELL_ASPECT = 2.1;  // cellW / cellH — wider cells so square cosy clothing tiles fill slots vertically without leaving big air gaps above/below the items
+const CELL_ASPECT = 2.4;  // cellW / cellH — wider cells so square cosy clothing tiles fully fill slots vertically and pack tightly horizontally
 
 // Compute cell size for a candidate (cols, rows) inside (availW, availH)
 // using the same fit rule as layoutBoard.
@@ -698,7 +698,7 @@ function layoutBoard() {
   board.cellW = cellW;
   board.cellH = cellH;
   board.slotW = cellW / SLOTS;
-  board.slotH = cellH * 0.90; // item area; rest is shelf-floor below
+  board.slotH = cellH * 0.95; // item area; only 5% reserved for the bottom wood edge
 }
 function shelfRect(c, r) {
   return {
@@ -733,116 +733,65 @@ function drawBackground() {
 
 function drawShelfBack(c, r) {
   const rect = shelfRect(c, r);
-  const post = Math.max(4, rect.w * 0.035);  // wooden side posts of the cabinet
+  const post = Math.max(4, rect.w * 0.030);  // thin wooden vertical posts (cell separators)
   const slotH = board.slotH;
 
-  // === OUTER SIDE POSTS — warm wooden frame of the shelving cabinet.
-  // 3-stop horizontal gradient: LIGHT outer edge (room light catching
-  // the bevel), MID wood, DARK inner edge (where the cubby recedes). ===
+  // === OUTER VERTICAL POSTS — narrow wood dividers between cells. Slightly
+  // thinner than before so cells feel less ''boxed in'' and items can pack
+  // visually tighter across the row. ===
   const leftG = ctx.createLinearGradient(rect.x, 0, rect.x + post, 0);
   leftG.addColorStop(0,    '#d8b380');
-  leftG.addColorStop(0.5,  '#a87a4d');
-  leftG.addColorStop(1,    '#5a3819');
+  leftG.addColorStop(0.55, '#a87a4d');
+  leftG.addColorStop(1,    '#6b4520');
   ctx.fillStyle = leftG;
   ctx.fillRect(rect.x, rect.y, post, rect.h);
 
   const rightG = ctx.createLinearGradient(rect.x + rect.w - post, 0, rect.x + rect.w, 0);
-  rightG.addColorStop(0,    '#5a3819');
-  rightG.addColorStop(0.5,  '#a87a4d');
+  rightG.addColorStop(0,    '#6b4520');
+  rightG.addColorStop(0.45, '#a87a4d');
   rightG.addColorStop(1,    '#d8b380');
   ctx.fillStyle = rightG;
   ctx.fillRect(rect.x + rect.w - post, rect.y, post, rect.h);
 
-  // Subtle vertical wood-grain lines on the side posts.
-  ctx.fillStyle = 'rgba(60, 30, 12, 0.18)';
-  const grainW = Math.max(1, post * 0.10);
-  ctx.fillRect(rect.x + post * 0.32, rect.y, grainW, rect.h);
-  ctx.fillRect(rect.x + post * 0.66, rect.y, grainW, rect.h);
-  ctx.fillRect(rect.x + rect.w - post * 0.66, rect.y, grainW, rect.h);
-  ctx.fillRect(rect.x + rect.w - post * 0.32, rect.y, grainW, rect.h);
-
-  // === INNER CUBBY LAYOUT ===
+  // === INNER FACE — single smooth vertical gradient, no flat back wall,
+  // no inner side walls, no separate ceiling. Reads as a soft niche shadow
+  // above the items merging into a cream rest area, with a warm wood
+  // band at the bottom that doubles as the shelf floor edge. ===
   const ix = rect.x + post;
   const iw = rect.w - post * 2;
-  const topH  = Math.max(6, slotH * 0.10);
-  const botH  = Math.max(6, slotH * 0.12);
-  const sideW = Math.max(4, iw * 0.06);
-
-  // BACK WALL — warm cream cubby interior, lit slightly brighter at
-  // the top to suggest the soft overhead room light.
-  const bw = ctx.createLinearGradient(0, rect.y, 0, rect.y + slotH);
-  bw.addColorStop(0,    '#f6e3c4');
-  bw.addColorStop(0.30, '#fff2d8');
-  bw.addColorStop(1,    '#ead2a8');
-  ctx.fillStyle = bw;
+  const innerG = ctx.createLinearGradient(0, rect.y, 0, rect.y + slotH);
+  innerG.addColorStop(0.00, '#7a4f24');   // top: deep wood shadow (overhang from cell above)
+  innerG.addColorStop(0.18, '#b88553');   // mid-wood transition
+  innerG.addColorStop(0.45, '#f5e3c0');   // cream — items sit against this
+  innerG.addColorStop(0.75, '#fff2d8');   // brightest cream where the items rest
+  innerG.addColorStop(1.00, '#d8b380');   // warm wood at bottom edge
+  ctx.fillStyle = innerG;
   ctx.fillRect(ix, rect.y, iw, slotH);
 
-  // === CEILING PLANK (top inner band) — dark wooden trim, the underside
-  // of the shelf above seen from below. ===
-  const ceilG = ctx.createLinearGradient(0, rect.y, 0, rect.y + topH);
-  ceilG.addColorStop(0,    '#3c220e');
-  ceilG.addColorStop(0.6,  '#5e3c1c');
-  ceilG.addColorStop(1,    '#83562b');
-  ctx.fillStyle = ceilG;
-  ctx.fillRect(ix, rect.y, iw, topH);
-  ctx.fillStyle = 'rgba(30, 15, 5, 0.55)';
-  ctx.fillRect(ix, rect.y + topH, iw, Math.max(1, slotH * 0.014));
-
-  // === INNER FLOOR PLANK — warm wooden surface where the items rest. ===
-  const floorY = rect.y + slotH - botH;
-  const floorG = ctx.createLinearGradient(0, floorY, 0, floorY + botH);
-  floorG.addColorStop(0,    '#9a6a3c');
-  floorG.addColorStop(0.4,  '#bd8a55');
-  floorG.addColorStop(1,    '#dcaf75');
-  ctx.fillStyle = floorG;
-  ctx.fillRect(ix, floorY, iw, botH);
-  ctx.fillStyle = 'rgba(45, 22, 8, 0.40)';
-  ctx.fillRect(ix, floorY, iw, Math.max(1, slotH * 0.010));
-
-  // === LEFT INNER WALL — wood catching the upper-left light. ===
-  const wallY = rect.y + topH;
-  const wallH = slotH - topH - botH;
-  const lwG = ctx.createLinearGradient(ix, 0, ix + sideW, 0);
-  lwG.addColorStop(0,    '#a4774a');
-  lwG.addColorStop(1,    '#5a3819');
-  ctx.fillStyle = lwG;
-  ctx.fillRect(ix, wallY, sideW, wallH);
-
-  // === RIGHT INNER WALL — same wood but in shadow from the implied
-  // upper-left light. ===
-  const rwG = ctx.createLinearGradient(ix + iw - sideW, 0, ix + iw, 0);
-  rwG.addColorStop(0,    '#4f3216');
-  rwG.addColorStop(1,    '#7a5530');
-  ctx.fillStyle = rwG;
-  ctx.fillRect(ix + iw - sideW, wallY, sideW, wallH);
+  // Subtle bottom-edge shadow so items appear to sit ON the warm wood band
+  // rather than floating in front of it.
+  ctx.fillStyle = 'rgba(60, 30, 12, 0.22)';
+  ctx.fillRect(ix, rect.y + slotH - Math.max(1, slotH * 0.018), iw, Math.max(1, slotH * 0.018));
 }
 
 function drawShelfFloor(c, r) {
   const rect = shelfRect(c, r);
   const floorY = rect.y + board.slotH;
   const floorH = rect.h - board.slotH;
+  if (floorH < 1) return;
 
-  // Wooden front lip — the front-facing plank where the cubby ends.
-  // Lighter on top (catching the warm room light) to dark below.
+  // Thin warm wood band that doubles as the visual ''bottom edge''
+  // of the shelf. No more brushed-metal display lip — just a small
+  // wood transition between rows so cells read as separate.
   const g = ctx.createLinearGradient(0, floorY, 0, floorY + floorH);
-  g.addColorStop(0,    '#dcaf75');
-  g.addColorStop(0.45, '#a07449');
+  g.addColorStop(0,    '#a87a4d');
   g.addColorStop(1,    '#5a3819');
   ctx.fillStyle = g;
   ctx.fillRect(rect.x, floorY, rect.w, floorH);
 
-  // Top edge soft highlight — warm glow where the wood catches the
-  // overhead room light.
-  ctx.fillStyle = 'rgba(255, 235, 195, 0.55)';
-  ctx.fillRect(rect.x, floorY, rect.w, Math.max(1, floorH * 0.10));
-
-  // Subtle mid-plank wood grain band (horizontal).
-  ctx.fillStyle = 'rgba(60, 30, 12, 0.12)';
-  ctx.fillRect(rect.x, floorY + floorH * 0.52, rect.w, Math.max(1, floorH * 0.06));
-
-  // Bottom shadow (the shelf casting onto whatever's below).
-  ctx.fillStyle = 'rgba(20, 10, 5, 0.55)';
-  ctx.fillRect(rect.x, floorY + floorH - Math.max(1, floorH * 0.10), rect.w, Math.max(1, floorH * 0.10));
+  // Bottom shadow under the wood band.
+  ctx.fillStyle = 'rgba(20, 10, 5, 0.50)';
+  ctx.fillRect(rect.x, floorY + floorH - Math.max(1, floorH * 0.18), rect.w, Math.max(1, floorH * 0.18));
 }
 
 // Render a puppy: floor shadow (axis-aligned, never rotated/scaled), then
@@ -903,10 +852,10 @@ function drawItem(typeId, cx, cy, w, h, opts) {
   const aspect = ATLAS_CELL_W / ATLAS_CELL_H;
   let sprW, sprH;
   if (w < h * aspect) {
-    sprW = w * 1.12;          // width-constrained — sprite as wide as the slot
+    sprW = w * 1.18;          // width-constrained — sprite as wide as the slot
     sprH = sprW / aspect;
   } else {
-    sprH = h * 1.12;          // height-constrained — sprite as tall as the slot
+    sprH = h * 1.18;          // height-constrained — sprite as tall as the slot
     sprW = sprH * aspect;
   }
   // Anchor uses the EFFECTIVE world Y-scale (bD) so the sprite bottom
