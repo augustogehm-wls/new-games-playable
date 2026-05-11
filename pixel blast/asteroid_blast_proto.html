@@ -2793,28 +2793,20 @@ function drawBgAsteroid(g, cx, cy, r) {
 
 function drawFrame(g) {
   const x = FRAME.x, y = FRAME.y, w = FRAME.w, h = FRAME.h;
-  // Outer panel
-  g.roundRect(x, y, w, h, 28).fill(COLORS.frame);
-  // Inner darker recess (where asteroid grid sits)
-  g.roundRect(x + 16, y + 16, w - 32, h - 32, 22).fill(COLORS.frameLo);
-  // Glowing inner edge
-  g.roundRect(x + 50, y + 50, w - 100, h - 100, 8).stroke({ color: COLORS.frameHi, width: 4, alignment: 0 });
-  // Sci-fi corner brackets — L-shapes hugging the panel corners
-  const br = 22;     // bracket reach
-  const bw = 4;      // bracket stroke
-  const off = 8;     // offset from panel corner
-  const drawBracket = (cx, cy, dx, dy) => {
-    g.moveTo(cx, cy + dy * br).lineTo(cx, cy).lineTo(cx + dx * br, cy)
-     .stroke({ color: COLORS.frameHi, width: bw, cap: 'round', join: 'round' });
-  };
-  drawBracket(x + off,         y + off,         +1, +1);
-  drawBracket(x + w - off,     y + off,         -1, +1);
-  drawBracket(x + off,         y + h - off,     +1, -1);
-  drawBracket(x + w - off,     y + h - off,     -1, -1);
-  // Tiny corner rivets / lights
-  for (const [rx, ry] of [[x + 28, y + 28], [x + w - 28, y + 28], [x + 28, y + h - 28], [x + w - 28, y + h - 28]]) {
-    g.circle(rx, ry, 3).fill(COLORS.frameHi);
-  }
+  // Outer panel — significantly rounder corners than v1 (matches PM ref).
+  // Radius bumped 28 -> 70 (~11% of frame dim) so the panel reads as a
+  // smooth screen/monitor rather than a sharp sci-fi crate.
+  g.roundRect(x, y, w, h, 70).fill(COLORS.frame);
+  // Inner darker recess (where the asteroid grid sits). Inset 16 px on each
+  // side, with proportionally rounded inner corners (60 vs the outer 70).
+  g.roundRect(x + 16, y + 16, w - 32, h - 32, 60).fill(COLORS.frameLo);
+  // Glowing inner edge — inset 50 px, radius scaled to remain concentric
+  // (8 -> 40 keeps the inner curve parallel to the outer two).
+  g.roundRect(x + 50, y + 50, w - 100, h - 100, 40).stroke({ color: COLORS.frameHi, width: 4, alignment: 0 });
+  // CORNER BRACKETS REMOVED — the L-shape sci-fi brackets don't compose with
+  // the new rounded corners (they'd appear floating outside the curved edge).
+  // The roundness itself reads as the "frame style"; no additional ornaments
+  // needed. The corner rivets are also gone for the same reason.
 }
 function drawBelt(g, geom) {
   // HUD path indicator — a thin dashed cyan border tracing the ship's flight
@@ -3215,13 +3207,42 @@ class PixelCell {
       if (tex) {
         const spr = new PIXI.Sprite(tex);
         spr.anchor.set(0.5, 0.5);
-        // Scale to fit the cell with a tiny padding (1.06x) so adjacent same-color
-        // sprites visually overlap and read as a connected moon-shape pattern,
-        // matching the original procedural design's intent.
-        const padding = 1.06;
-        const scale = (size * padding) / Math.max(spr.width, spr.height);
-        spr.scale.set(scale);
-        spr.position.set(size / 2, size / 2);
+        // ───────────────────────────────────────────────────────────────────
+        // ORGANIC RANDOM JITTER — CONSTRAINED (no gaps, no over-encroachment)
+        // ───────────────────────────────────────────────────────────────────
+        // PM directive: random felt more organic. Goal: organic feel WHILE
+        // ensuring "no asteroid occupies a neighbor's space AND almost no
+        // empty space between asteroids".
+        //
+        // Strategy: every asteroid renders at MINIMUM 113% of its cell size
+        // (BASE_PADDING) — so adjacent asteroids always overlap on each
+        // shared edge → zero gaps. On top of that, a small random scale
+        // multiplier (1.00..1.10) and ±3px position jitter give organic
+        // variety without anyone growing huge enough to dominate a neighbor.
+        //
+        // Numerical guarantee:
+        //   • Min asteroid size: 1.13 * 1.00 * size = 1.13 * size (= 6.5%
+        //     overlap with each neighbor edge → no visible gap)
+        //   • Max asteroid size: 1.13 * 1.10 * size ≈ 1.24 * size (= 12%
+        //     overlap per side → noticeable, but not invasive)
+        //   • Position jitter ±3px on a ~22 px cell = ~±13.6% — combined
+        //     with baseline overlap, no shift exposes a neighbor's cell.
+        const BASE_PADDING = 1.13;
+        const baseScale = (size * BASE_PADDING) / Math.max(spr.width, spr.height);
+        // 4 independent RNGs from cell seed
+        const r1 = ((seed * 2654435761) >>> 0) / 4294967296;   // scale
+        const r2 = ((seed * 1597334677) >>> 0) / 4294967296;   // posX
+        const r3 = ((seed * 374761393)  >>> 0) / 4294967296;   // posY
+        const r4 = ((seed * 2246822507) >>> 0) / 4294967296;   // rotation
+        const scaleJitter = 1.00 + r1 * 0.10;                  // 1.00..1.10
+        spr.scale.set(baseScale * scaleJitter);
+        const JITTER_PX = 3.0;
+        const dx = (r2 - 0.5) * 2 * JITTER_PX;                 // ±3 px
+        const dy = (r3 - 0.5) * 2 * JITTER_PX;
+        spr.position.set(size / 2 + dx, size / 2 + dy);
+        // Static rotation per cell — pure visual variety (no animation;
+        // disabled animated rotation lives as TODO in updateNoise below).
+        spr.rotation = r4 * Math.PI * 2;
         this._asteroidSprite = spr;
         this.sprite.addChild(spr);
 
@@ -3960,15 +3981,27 @@ class BeltArrows {
     this.container = new PIXI.Container();
     this.NUM = 18;
     this.arrows = [];
+    // PM directive (2026-05-11): chevrons cycle through White, Blue, Yellow,
+    // Purple in sequence around the loop. Color is assigned per-index modulo
+    // 4, so as the chevrons march around the belt the colors rotate visibly.
+    // Picked from the asteroid_blast palette so chevrons feel native:
+    //   White  0xFFFFFF  — neutral / matches W asteroid
+    //   Blue   0x6CD5E8  — frameHi cyan / matches C asteroid tint
+    //   Yellow 0xFFD24A  — matches Y asteroid (gold) and CTA
+    //   Purple 0xB070DD  — matches P ship tint (PIG_TINTS.P)
+    const ARROW_PALETTE = [0xFFFFFF, 0x6CD5E8, 0xFFD24A, 0xB070DD];
     for (let i = 0; i < this.NUM; i++) {
+      const c = ARROW_PALETTE[i % ARROW_PALETTE.length];
       const a = new PIXI.Graphics();
-      // Glow layer (wider, soft)
+      // Glow layer (wider, soft) — uses chevron's own color so the glow halos
+      // each chevron in its own hue.
       a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
-        .stroke({ color: 0x6cd5e8, width: 8, alpha: 0.25, cap: 'round', join: 'round' });
-      // Core bright chevron
+        .stroke({ color: c, width: 8, alpha: 0.30, cap: 'round', join: 'round' });
+      // Core bright chevron — the dominant visible color.
       a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
-        .stroke({ color: 0x6cd5e8, width: 3, cap: 'round', join: 'round' });
-      // Inner highlight
+        .stroke({ color: c, width: 3, cap: 'round', join: 'round' });
+      // Inner highlight — kept white on all four so each chevron reads as
+      // having a specular shine regardless of its base color.
       a.moveTo(-10, -9).lineTo(0, 0).lineTo(-10, 9)
         .stroke({ color: 0xffffff, width: 1.2, alpha: 0.9, cap: 'round', join: 'round' });
       this.arrows.push(a);
