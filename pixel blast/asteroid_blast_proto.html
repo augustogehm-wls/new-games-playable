@@ -4450,8 +4450,10 @@ class Game {
     const bg = new PIXI.Graphics();
     bg.roundRect(-W/2, -H/2, W, H, 8).fill({ color: 0x0a1838, alpha: 0.92 });
     bg.roundRect(-W/2, -H/2, W, H, 8).stroke({ color: 0x6cd5e8, width: 2 });
-    // Tiny ship icon: simple triangle on the left side
-    bg.poly([-46, 0, -38, -6, -38, 6]).fill(0x6cd5e8);
+    // Tiny ship icon: simple triangle on the left side, pointing RIGHT
+    // (PM 2026-05-12). Tip at (-38, 0) and base at x=-46 — the arrow now
+    // visually "leads into" the counter text instead of pointing away.
+    bg.poly([-46, -6, -46, 6, -38, 0]).fill(0x6cd5e8);
     bg.circle(-32, 0, 2.5).fill(0x6cd5e8);
     bg.circle(-26, 0, 2.5).fill(0x6cd5e8);
     bg.circle(-20, 0, 2.5).fill(0x6cd5e8);
