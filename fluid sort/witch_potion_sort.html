@@ -376,7 +376,7 @@ let flowEmitAccum = 0;
 // extra transform stack added.
 // ============================================================
 const tutorial = {
-  dismissed: false,            // permanently disabled after first interaction with the puzzle
+  dismissed: false,            // only set after BOTH demos are completed (or no second demo exists)
   state: 'idle',               // 'idle' | 'pointing-source' | 'pointing-target'
   bottle: null,                // current target of the hand
   // Hand transform (animated). `mirror` flips horizontally so the wrist
@@ -386,10 +386,22 @@ const tutorial = {
   // Tap cycle — drives the hand-shrink + bottle-jump rhythm.
   tapPhase: 0,                 // 0..1, sawtooth driven by dt
   tapDur: 1.1,                 // seconds per full tap cycle
-  // Idle delay before the hand first appears (reference uses a small delay
-  // so the player has a chance to act before being prompted).
+  // Idle delay before the hand first appears AND between demos (e.g.,
+  // demo 1 → demo 2). Reduced from 1.6s → 0.4s after PM flagged that the
+  // tutorial felt slow to start; the reference's longer delay didn't
+  // translate well to the playable format where time-to-engagement matters.
   idleTimer: 0,
-  IDLE_DELAY: 1.6
+  IDLE_DELAY: 0.4,
+  // Demo index. 0 = first demo (pour goal-color into the objective tube).
+  // 1 = consolidation demo after the first goal-pour completes (pour a
+  // NON-goal color from one regular cup into another cup that can accept
+  // it — teaches that pours don't have to target the objective).
+  demoIndex: 0,
+  // For demo 2, the hand alternates between pointing at consolidationSrc
+  // (a cup with non-goal color on top) and consolidationDst (another cup
+  // that can accept that color).
+  consolidationSrc: null,
+  consolidationDst: null
 };
 
 function buildLevel() {
@@ -612,33 +624,29 @@ function handleTap(px, py) {
   const b = hitTestBottle(px, py);
   if (!b) return;
 
-  // Tutorial dismissal — any successful interaction with the puzzle
-  // (select, deselect, valid pour, even an invalid pour-attempt) is a
-  // signal that the player understands the mechanic. Dismiss the hand
-  // permanently. The hand may transiently re-target between source and
-  // objective on selection, but only via the state machine BEFORE the
-  // first dismiss; once the player interacts at least once we hide it
-  // for good. We dismiss INSIDE the if/else branches below so we only
-  // dismiss on real engagement (not stray taps on empty bottles).
+  // Tutorial advancement happens inside the branches below: demo 1 → demo 2
+  // on a successful pour into the objective; demo 2 → dismissed on a
+  // successful pour between two non-objective cups. Selecting / deselecting
+  // / wrong-bottle taps NEVER dismiss the hand — it persists until the
+  // demoed action actually happens (or the player wins).
 
   if (!selected) {
     if (b.layers.length === 0) return;
     if (b.isObjective) return; // objective is destination only
     if (isBottleCompleted(b)) return; // sealed bottles can't be picked up
     selected = b;
-    // First click that reveals the puzzle: if the hand was pointing at
-    // THIS bottle (the suggested source), keep the tutorial alive so it
-    // can shift to the objective on the next idle. Any other bottle =>
-    // dismiss permanently (player explored on their own).
+    // Tutorial coordination — if the player tapped the suggested source
+    // bottle, snap the hand forward to the destination-pointing state.
+    // If they tapped a DIFFERENT bottle, the hand STAYS where it is so
+    // the player gets another chance to discover the demoed move.
     if (!tutorial.dismissed) {
-      if (tutorial.bottle && b !== tutorial.bottle) {
-        dismissTutorial();
-      } else {
+      if (tutorial.bottle && b === tutorial.bottle) {
         // Snap to the next state immediately (no idle delay between
         // source-tap and target-pointing — feels more responsive).
         tutorial.idleTimer = tutorial.IDLE_DELAY;
         tutorialUpdateTarget();
       }
+      // else: leave tutorial alive — persistence is the point.
     }
     killTweensOf(b, ['lift', 'glow']);
     tween(b, { lift: -b.h * 0.1, glow: 1 }, 0.22, { ease: 'outBack' });
@@ -647,7 +655,9 @@ function handleTap(px, py) {
     triggerSlosh(b, 0.95, 0.55, 0.14);
     sfxBottleUp();
   } else if (selected === b) {
-    if (!tutorial.dismissed) dismissTutorial();
+    // Deselect — don't dismiss the tutorial. The hand returns to
+    // pointing-source on the next idle tick (tutorialUpdateTarget reads
+    // selected===null and re-targets the source).
     const s = selected; selected = null;
     killTweensOf(s, ['lift', 'glow']);
     tween(s, { lift: 0, glow: 0 }, 0.2, { ease: 'outQuad' });
@@ -655,11 +665,21 @@ function handleTap(px, py) {
     triggerSlosh(s, 0.4, 0.6, 0);
     sfxBottleDown();
   } else {
-    if (!tutorial.dismissed) dismissTutorial();
     const src = selected; const dst = b;
     selected = null;
     if (canPour(src, dst)) {
       executePour(src, dst);
+      // Tutorial advancement: demo 1 advances on a pour into the objective
+      // (the demoed action); demo 2 dismisses on a pour between two cups
+      // (its demoed action). Pours that don't match the current demo's
+      // intent leave the tutorial alone so the player still gets the hint.
+      if (!tutorial.dismissed) {
+        if (tutorial.demoIndex === 0 && dst.isObjective) {
+          advanceTutorialToConsolidation();
+        } else if (tutorial.demoIndex === 1 && !dst.isObjective) {
+          dismissTutorial();
+        }
+      }
     } else {
       killTweensOf(src, ['lift', 'glow']);
       tween(src, { lift: 0, glow: 0 }, 0.2, { ease: 'outQuad' });
@@ -704,6 +724,48 @@ function findTutorialSourceBottle() {
   return fallback;
 }
 
+// For demo 2 (consolidation between cups): find a non-objective cup with
+// a NON-goal-color on top, plus a different non-objective cup that can
+// accept that color (matching top, OR empty with space). Returns {src,dst}
+// or null if no valid pair exists. Teaches the player that pours don't
+// have to target the objective tube.
+function findConsolidationSetup() {
+  for (const src of bottles) {
+    if (src.isObjective) continue;
+    if (!src.layers || src.layers.length === 0) continue;
+    if (isBottleCompleted(src)) continue;
+    const srcTop = src.layers[src.layers.length - 1];
+    if (srcTop === GOAL_COLOR) continue;          // demo 1 handles goal-color sources
+    for (const dst of bottles) {
+      if (dst === src) continue;
+      if (dst.isObjective) continue;
+      if (isBottleCompleted(dst)) continue;
+      if (dst.layers.length >= dst.capacity) continue;
+      if (dst.layers.length === 0) return { src, dst };   // empty cup is always valid
+      const dstTop = dst.layers[dst.layers.length - 1];
+      if (dstTop === srcTop) return { src, dst };         // matching top — valid pour
+    }
+  }
+  return null;
+}
+
+// Called once after the player completes their first pour into the
+// objective. Switches the tutorial to demo 2 (consolidation between
+// regular cups) if a valid pair exists; otherwise dismisses silently.
+// Hides the hand briefly with a fresh idle delay so the player has a beat
+// to register the first pour landing before the new demo reappears.
+function advanceTutorialToConsolidation() {
+  const pair = findConsolidationSetup();
+  if (!pair) { dismissTutorial(); return; }
+  tutorial.demoIndex = 1;
+  tutorial.consolidationSrc = pair.src;
+  tutorial.consolidationDst = pair.dst;
+  tutorial.state = 'idle';
+  tutorial.idleTimer = 0;
+  killTweensOf(tutorial.hand);
+  tween(tutorial.hand, { alpha: 0, scale: 0.8 }, 0.25, { ease: 'inQuad' });
+}
+
 function tutorialHandTargetFor(b) {
   // Place the fingertip on the bottle's body so the gesture is clearly
   // "tap THIS bottle". The hand silhouette extends down-and-to-one-side
@@ -724,16 +786,45 @@ function tutorialHandTargetFor(b) {
 }
 
 function tutorialUpdateTarget() {
-  // Choose source vs. target based on the current selection state.
+  // Choose source vs. target based on the current selection state and the
+  // current demo index (demo 1 = pour goal-color into objective; demo 2 =
+  // consolidation between two non-objective cups).
   if (won || tutorial.dismissed) { tutorial.state = 'idle'; return; }
-  if (!selected) {
-    const src = findTutorialSourceBottle();
-    if (!src) { tutorial.state = 'idle'; return; }
-    tutorial.state = 'pointing-source';
-    tutorial.bottle = src;
+  if (tutorial.demoIndex === 1) {
+    // Demo 2: point at the prepicked consolidation pair. If either has
+    // become invalid (cup completed, emptied, or filled to capacity),
+    // repick a fresh pair before giving up.
+    const srcInvalid = !tutorial.consolidationSrc
+                       || isBottleCompleted(tutorial.consolidationSrc)
+                       || tutorial.consolidationSrc.layers.length === 0;
+    const dstInvalid = !tutorial.consolidationDst
+                       || isBottleCompleted(tutorial.consolidationDst)
+                       || tutorial.consolidationDst.layers.length >= tutorial.consolidationDst.capacity;
+    if (srcInvalid || dstInvalid) {
+      const fresh = findConsolidationSetup();
+      if (!fresh) { tutorial.dismissed = true; tutorial.state = 'idle'; return; }
+      tutorial.consolidationSrc = fresh.src;
+      tutorial.consolidationDst = fresh.dst;
+    }
+    if (!selected) {
+      tutorial.state = 'pointing-source';
+      tutorial.bottle = tutorial.consolidationSrc;
+    } else {
+      tutorial.state = 'pointing-target';
+      tutorial.bottle = tutorial.consolidationDst;
+    }
   } else {
-    tutorial.state = 'pointing-target';
-    tutorial.bottle = objective;
+    // Demo 1: existing behavior — find a goal-color source, then point at
+    // the objective tube once the player selects it.
+    if (!selected) {
+      const src = findTutorialSourceBottle();
+      if (!src) { tutorial.state = 'idle'; return; }
+      tutorial.state = 'pointing-source';
+      tutorial.bottle = src;
+    } else {
+      tutorial.state = 'pointing-target';
+      tutorial.bottle = objective;
+    }
   }
   const t = tutorialHandTargetFor(tutorial.bottle);
   if (!t) { tutorial.state = 'idle'; return; }

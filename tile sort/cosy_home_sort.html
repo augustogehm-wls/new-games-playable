@@ -475,10 +475,23 @@ let COLS = 4, ROWS = 8;
 // and returns the first one whose computed cellW/cellH meet the minimum
 // readable thresholds below. Total tile count tops out at 5*8 = 40, and the
 // short axis is floored at 3 (2-wide / 2-tall boards felt too sparse).
-const GRID_OPTIONS_PORTRAIT  = [[5,12], [5,10], [4,12], [4,10], [4,8], [3,12], [3,10], [3,8]];
+const GRID_OPTIONS_PORTRAIT  = [[5,12], [5,10], [4,12], [4,10], [4,8], [3,12], [3,10], [3,8], [2,12], [2,10], [2,8]];
 const GRID_OPTIONS_LANDSCAPE = [[10,8], [10,7], [10,6], [10,5], [9,8], [9,7], [9,6], [8,9], [8,8], [8,7], [8,6], [8,5], [8,4], [8,3]];
-const MIN_CELL_W_PX = 75;   // was 87; tightened so 8-col landscape and 5-col portrait fit on phones with the wider 2.1 cell aspect
-const MIN_CELL_H_PX = 32;   // was 60; cells are now shorter to match the square cosy clothing tiles
+// Raised from 75 → 130 across two PM iterations. At 375 px viewport (iPhone
+// portrait), 3-col cells are ~121×50 and 4-col cells are ~91×38 — both
+// still hard to grab the clothes. With threshold 130, only 2-col fits
+// (~181×76 cells), giving a much more comfortable tap target. Tablets and
+// desktop continue to get the denser layouts where their wider viewports
+// keep cells above the threshold. Also halves the slot count vs 4-col
+// (from 144 to 72), which significantly helps mobile FPS.
+const MIN_CELL_W_PX = 130;
+// Bumped from 32 → 75 after a second PM review of mobile sizing. At 375 px
+// portrait the previous 2×12 layout was HEIGHT-limited (cells ~158×66 px),
+// which kept the clothing art cramped. With 75 px floor, 12-row and 10-row
+// 2-col layouts fail their height check (sub-75 cellH), so pickGrid drops
+// to 2-col 8-row — width-limited, cells ~181×76 px. Tablet/desktop are
+// width-limited at their wider viewports and stay above the floor.
+const MIN_CELL_H_PX = 75;
 
 // Item types — emoji + soft circular backdrop colour. ~40 prefabs
 // approximating the Goods Sorting reference (drinks, snacks,
@@ -1216,7 +1229,8 @@ function onPointerDown(e) {
   // outCubic — feels like the item is being plucked up off the shelf.
   tween(drag, { pickupT: 1 }, 0.18, { ease: 'outCubic' });
   sfxPick();
-  dismissTutorial();
+  // Tutorial is NOT dismissed on first pickup — it persists until the
+  // player completes a match (see the triggerMatch onComplete hook).
 }
 function onPointerMove(e) {
   if (!drag) return;
@@ -1693,7 +1707,21 @@ function triggerMatch(c, r) {
         cell.soldOut = true;
         cell.stampProgress = 0;
         // Stamp slide-down (clipped) — runs in parallel with item fade-out.
-        tween(cell, { stampProgress: 1.0 }, 0.36, { ease: 'outCubic', onComplete: checkWin });
+        // After the stamp settles, run checkWin AND advance/dismiss the
+        // tutorial: any successful match counts as the player understanding
+        // the mechanic. First match → second demo; second match → dismiss.
+        tween(cell, { stampProgress: 1.0 }, 0.36, { ease: 'outCubic', onComplete: () => {
+          checkWin();
+          if (!tutorial.dismissed) {
+            if (won) {
+              tutorial.dismissed = true;
+            } else if (tutorial.demoIndex === 0) {
+              advanceTutorialToSecondMove(c, r);
+            } else {
+              tutorial.dismissed = true;
+            }
+          }
+        }});
         // Items recover to neutral scale + fade to 0 alpha — appears as
         // "settling, then dissolving" beneath the descending shutter.
         tween(cell, { itemSx: 1.0, itemSy: 1.0, itemAlpha: 0 }, 0.22, { ease: 'outQuad', onComplete: () => {
@@ -1740,6 +1768,18 @@ function checkWin() {
 // ============================================================
 const tutorial = {
   dismissed: false,
+  // Demo index. 0 = first demo. 1 = second demo after the first match
+  // completes. Both demos are pre-picked at level build (see resetTutorial)
+  // so advancing demo 1 → demo 2 needs no mid-game board manipulation.
+  demoIndex: 0,
+  // Shelf to skip when picking the second demo (the one that just matched).
+  excludeShelf: null,
+  // Pre-picked demo setups. Each is { src:{c,r,s}, dst:{c,r,s}, typeId } or null.
+  // demo1 is set up by manipulating the initial board to create a [X,X,null]
+  // shelf near centre; demo2 is set up the same way at a different shelf so
+  // both demos are organically valid from level start.
+  demo1: null,
+  demo2: null,
   phase: 'approach',  // 'approach' | 'press' | 'drag' | 'release' | 'idle'
   t: 0,
   // src/dst/typeId are filled by pickTutorialSetup() after each buildLevel.
@@ -1749,30 +1789,49 @@ const tutorial = {
   dst: { c: 0, r: 0, s: 0 },
   typeId: 0,
   hX: 0, hY: 0, ghostAlpha: 0, pressDown: 0,
+  // Master alpha for the hand+ghost — fades 0→1 during 'approach' (smooth
+  // entry, no pop-in after the player drops an item) and 1→0 during
+  // 'release' (smooth exit when the hand reaches the destination, no hard
+  // cut at the end of each demo cycle).
+  handAlpha: 0,
   // Phase durations (seconds)
   IDLE_DUR: 0.50, APPROACH_DUR: 0.50, PRESS_DUR: 0.20,
   DRAG_DUR: 0.85, RELEASE_DUR: 0.20,
 };
 
-// Picks tutorial src/dst from the freshly-dealt board with BOTH endpoints
-// near the centre of the grid. We always manufacture a [X, X, null] shelf at
-// the most central position via item swaps — this guarantees the demo plays
-// in the screen's visual focus regardless of how the random level dealt.
-// Returns false (and the tutorial is dismissed) only if the board has too
-// little variety to host a demo.
-function pickTutorialSetup() {
-  if (!shelves.length) return false;
+// Picks a tutorial src/dst pair from the freshly-dealt board with BOTH
+// endpoints near the centre of the grid. We manufacture a [X, X, null]
+// shelf at the most central available position via item swaps — this
+// guarantees the demo plays in the screen's visual focus regardless of
+// how the random level dealt.
+//
+// Args (both optional, both arrays):
+//   excludeShelves — list of {c, r} cells ineligible for centre OR source
+//     OR donor (used so demo 2 doesn't disturb demo 1's pre-picked shelves).
+//   excludeTypeIds — list of typeIds NOT to use as the demo's pickId
+//     (used so demo 2 picks a different colour than demo 1 — critical when
+//     each typeId only exists 3× on the board: demo 1 consumes all 3, so
+//     demo 2 must pick a different colour to have any items to source).
+//
+// Returns { src:{c,r,s}, dst:{c,r,s}, typeId } or null if no setup fits.
+function pickTutorialSetup(excludeShelves, excludeTypeIds) {
+  if (!shelves.length) return null;
   const cy = (ROWS - 1) / 2;
   const cx = (COLS - 1) / 2;
   const dist = (c, r) => Math.hypot(c - cx, r - cy);
 
-  const positions = [];
+  let positions = [];
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++)
       positions.push({ c, r, d: dist(c, r) });
   positions.sort((a, b) => a.d - b.d);
+  if (excludeShelves && excludeShelves.length) {
+    positions = positions.filter(p => !excludeShelves.some(e => e.c === p.c && e.r === p.r));
+  }
+  if (!positions.length) return null;
 
   // Pick the typeId with the most occurrences — easiest to source via swaps.
+  // Skip any typeIds explicitly excluded (e.g., demo 1's colour for demo 2).
   const counts = {};
   for (let r = 0; r < ROWS; r++)
     for (let c = 0; c < COLS; c++)
@@ -1780,14 +1839,16 @@ function pickTutorialSetup() {
         if (id != null) counts[id] = (counts[id] || 0) + 1;
   let pickId = -1, pickCount = 0;
   for (const id in counts) {
+    if (excludeTypeIds && excludeTypeIds.includes(+id)) continue;
     if (counts[id] > pickCount) { pickCount = counts[id]; pickId = +id; }
   }
   // Need at least 3 of pickId on the board: 2 forced into centre + 1 source.
-  if (pickId < 0 || pickCount < 3) return false;
+  if (pickId < 0 || pickCount < 3) return null;
 
   // Force shelves[centre] = [pickId, pickId, null] via swaps with non-centre
   // shelves. Each unmatched slot in the centre is exchanged with a slot
-  // somewhere else holding the value we need (pickId or null).
+  // somewhere else holding the value we need (pickId or null). Donor pool
+  // also respects excludeShelves so demo 1's shelves are never touched by demo 2.
   const centre = positions[0];
   const centreCell = shelves[centre.r][centre.c];
   const want = [pickId, pickId, null];
@@ -1803,35 +1864,130 @@ function pickTutorialSetup() {
       }
       if (donorPos) break;
     }
-    if (!donorPos) return false;
+    if (!donorPos) return null;
     const donorItems = shelves[donorPos.r][donorPos.c].items;
     const tmp = donorItems[donorPos.s];
     donorItems[donorPos.s] = centreCell.items[s];
     centreCell.items[s] = tmp;
   }
 
-  // Pick the source — the closest-to-centre shelf (other than centre) that
-  // still holds pickId. Both tutorial endpoints land in the centric ring.
+  // Pick the source — the closest-to-centre shelf (other than centre, and
+  // not in the excludeShelves filter) that still holds pickId.
   for (const srcPos of positions) {
     if (srcPos.c === centre.c && srcPos.r === centre.r) continue;
     const items = shelves[srcPos.r][srcPos.c].items;
     const sIdx = items.indexOf(pickId);
     if (sIdx < 0) continue;
-    tutorial.dst = { c: centre.c, r: centre.r, s: centreCell.items.indexOf(null) };
-    tutorial.src = { c: srcPos.c, r: srcPos.r, s: sIdx };
-    tutorial.typeId = pickId;
-    return true;
+    return {
+      dst: { c: centre.c, r: centre.r, s: centreCell.items.indexOf(null) },
+      src: { c: srcPos.c, r: srcPos.r, s: sIdx },
+      typeId: pickId
+    };
+  }
+  return null;
+}
+
+// Picks a tutorial demo from the CURRENT board state WITHOUT manipulating
+// items. Used for the second demo (after the first match completes) and as
+// a fallback when the initial demo's src/dst becomes invalid mid-gameplay —
+// in both cases we cannot afford to teleport items around, since the player
+// is already in control. Scans for any shelf that organically holds two of
+// a kind + one empty slot, plus a matching third copy elsewhere.
+function pickTutorialSetupOrganic(excludeShelf) {
+  if (!shelves.length) return false;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (excludeShelf && c === excludeShelf.c && r === excludeShelf.r) continue;
+      const cell = shelves[r][c];
+      if (cell.soldOut || cell.phase === 'matching') continue;
+      const items = cell.items;
+      // Need exactly: 2 of the same typeId + 1 null (any order).
+      let matchType = null;
+      let nullIdx = -1;
+      let valid = true;
+      for (let s = 0; s < 3; s++) {
+        if (items[s] == null) {
+          if (nullIdx !== -1) { valid = false; break; }   // 2+ empties = not a tutorial-ready shelf
+          nullIdx = s;
+        } else if (matchType == null) {
+          matchType = items[s];
+        } else if (items[s] !== matchType) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid || nullIdx < 0 || matchType == null) continue;
+      // Find the third copy elsewhere.
+      for (let r2 = 0; r2 < ROWS; r2++) {
+        for (let c2 = 0; c2 < COLS; c2++) {
+          if (c2 === c && r2 === r) continue;
+          const cell2 = shelves[r2][c2];
+          if (cell2.soldOut || cell2.phase === 'matching') continue;
+          const sIdx = cell2.items.indexOf(matchType);
+          if (sIdx >= 0) {
+            tutorial.dst = { c, r, s: nullIdx };
+            tutorial.src = { c: c2, r: r2, s: sIdx };
+            tutorial.typeId = matchType;
+            return true;
+          }
+        }
+      }
+    }
   }
   return false;
 }
 
+// Advance to the SECOND demo after the first match completes. Switches the
+// active src/dst/typeId to the pre-picked demo2 setup (no mid-game board
+// manipulation — both demos were prepared at level build). Starts in
+// 'idle' for a brief beat so the stamp slide-down can settle before the
+// new hand fades in. If demo2 is null (level didn't admit a second setup)
+// the tutorial dismisses silently.
+function advanceTutorialToSecondMove(excludeC, excludeR) {
+  if (!tutorial.demo2) {
+    tutorial.dismissed = true;
+    return;
+  }
+  tutorial.demoIndex = 1;
+  tutorial.excludeShelf = { c: excludeC, r: excludeR };
+  tutorial.src = { ...tutorial.demo2.src };
+  tutorial.dst = { ...tutorial.demo2.dst };
+  tutorial.typeId = tutorial.demo2.typeId;
+  tutorial.phase = 'idle';
+  tutorial.t = 0;
+  tutorial.ghostAlpha = 0;
+  tutorial.pressDown = 0;
+}
+
 function resetTutorial() {
   tutorial.dismissed = false;
+  tutorial.demoIndex = 0;
+  tutorial.excludeShelf = null;
   tutorial.phase = 'approach';
   tutorial.t = 0;
   tutorial.ghostAlpha = 0;
   tutorial.pressDown = 0;
-  if (!pickTutorialSetup()) tutorial.dismissed = true;
+  // Pre-pick BOTH demos at level build so demo 2 doesn't need any mid-game
+  // board manipulation. demo1 picks the closest-to-centre shelf; demo2
+  // picks the next-closest, excluding demo1's centre AND source from its
+  // donor pool, AND using a DIFFERENT typeId than demo1. The typeId
+  // exclusion matters because this level template uses exactly 3 of each
+  // colour — demo1 consumes all 3 of its colour, so demo2 must source
+  // from a different colour. demo2 may still be null when the level
+  // doesn't accommodate a second setup — that's fine, we just skip
+  // showing demo 2 in that case.
+  tutorial.demo1 = pickTutorialSetup(null, null);
+  if (!tutorial.demo1) { tutorial.dismissed = true; return; }
+  tutorial.demo2 = pickTutorialSetup(
+    [
+      { c: tutorial.demo1.dst.c, r: tutorial.demo1.dst.r },
+      { c: tutorial.demo1.src.c, r: tutorial.demo1.src.r }
+    ],
+    [tutorial.demo1.typeId]
+  );
+  tutorial.src = { ...tutorial.demo1.src };
+  tutorial.dst = { ...tutorial.demo1.dst };
+  tutorial.typeId = tutorial.demo1.typeId;
 }
 
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -1840,6 +1996,70 @@ function updateTutorial(dt) {
   if (tutorial.dismissed || won) return;
   // If the layout isn't ready yet (board not laid out), skip.
   if (!board || !board.cellW) return;
+  // While the player is actively dragging an item, freeze the tutorial
+  // state machine and put it in 'idle'. drawTutorialHand also hides the
+  // hand entirely during drag so the player isn't distracted by a ghost
+  // item moving alongside their dragged item. Parking in 'idle' (not
+  // 'approach') means that when the drag resolves, the player gets a
+  // brief IDLE_DUR pause before the demo restarts — they see their drop
+  // land before the new hand fades in.
+  if (drag) {
+    tutorial.phase = 'idle';
+    tutorial.t = 0;
+    tutorial.ghostAlpha = 0;
+    tutorial.pressDown = 0;
+    tutorial.handAlpha = 0;
+    return;
+  }
+  // Also freeze while an item is mid-transit (between drop and landing,
+  // ~0.30 s). The source slot is cleared synchronously on drop, but the
+  // destination slot stays null until the fly-tween lands. In that window
+  // srcValid would briefly fail and the re-pick would land on demo2's
+  // [X,X,null] shelf prematurely — the PM saw this as a 2-3 frame
+  // "phantom hop" to a third tile before the real advancement fires.
+  // Treating transit-in-progress as frozen avoids the early jump; once
+  // the item lands, the normal flow handles match-vs-no-match correctly.
+  if (transit.length > 0) {
+    tutorial.phase = 'idle';
+    tutorial.t = 0;
+    tutorial.ghostAlpha = 0;
+    tutorial.pressDown = 0;
+    tutorial.handAlpha = 0;
+    return;
+  }
+  const srcRow = shelves[tutorial.src.r];
+  const srcCell = srcRow && srcRow[tutorial.src.c];
+  const dstRow = shelves[tutorial.dst.r];
+  const dstCell = dstRow && dstRow[tutorial.dst.c];
+  // If the demoed src or dst is mid-match or sold-out, a match chain is
+  // processing (or just completed). The triggerMatch onComplete handles
+  // tutorial advancement — skip this tick so we don't trigger a spurious
+  // re-pick during the animation window.
+  if ((srcCell && (srcCell.phase === 'matching' || srcCell.soldOut))
+   || (dstCell && (dstCell.phase === 'matching' || dstCell.soldOut))) {
+    return;
+  }
+  // Check whether the player has moved items (via a completed drop) in a
+  // way that makes the demoed move impossible. If so, dismiss when on
+  // demo 2 (the final demo — never show a "third" hand at a different
+  // shelf), or re-pick organically when on demo 1 (no mid-game board
+  // manipulation, just point at an existing [X,X,null] if one exists).
+  const srcValid = srcCell && srcCell.items[tutorial.src.s] === tutorial.typeId;
+  const dstValid = dstCell && dstCell.items[tutorial.dst.s] == null;
+  if (!srcValid || !dstValid) {
+    if (tutorial.demoIndex === 1) {
+      tutorial.dismissed = true;
+      return;
+    }
+    if (!pickTutorialSetupOrganic(tutorial.excludeShelf)) {
+      tutorial.dismissed = true;
+      return;
+    }
+    tutorial.phase = 'approach';
+    tutorial.t = 0;
+    tutorial.ghostAlpha = 0;
+    tutorial.pressDown = 0;
+  }
   tutorial.t += dt;
   const sP = slotCenter(tutorial.src.c, tutorial.src.r, tutorial.src.s);
   const dP = slotCenter(tutorial.dst.c, tutorial.dst.r, tutorial.dst.s);
@@ -1851,12 +2071,14 @@ function updateTutorial(dt) {
     tutorial.hY = lerp(sP.y - 80, sP.y, e);
     tutorial.ghostAlpha = 0;
     tutorial.pressDown = 0;
+    tutorial.handAlpha = k;   // fade in 0→1 alongside the falling-in motion
     if (k >= 1) { tutorial.phase = 'press'; tutorial.t = 0; }
   } else if (tutorial.phase === 'press') {
     const k = Math.min(1, tutorial.t / tutorial.PRESS_DUR);
     tutorial.hX = sP.x; tutorial.hY = sP.y;
     tutorial.pressDown = EASE.outQuad(k);
     tutorial.ghostAlpha = k * 0.5;
+    tutorial.handAlpha = 1;
     if (k >= 1) { tutorial.phase = 'drag'; tutorial.t = 0; }
   } else if (tutorial.phase === 'drag') {
     const k = Math.min(1, tutorial.t / tutorial.DRAG_DUR);
@@ -1865,16 +2087,19 @@ function updateTutorial(dt) {
     tutorial.hY = lerp(sP.y, dP.y, e);
     tutorial.pressDown = 1;
     tutorial.ghostAlpha = 0.5;
+    tutorial.handAlpha = 1;
     if (k >= 1) { tutorial.phase = 'release'; tutorial.t = 0; }
   } else if (tutorial.phase === 'release') {
     const k = Math.min(1, tutorial.t / tutorial.RELEASE_DUR);
     tutorial.hX = dP.x; tutorial.hY = dP.y;
     tutorial.pressDown = 1 - EASE.outQuad(k);
     tutorial.ghostAlpha = 0.5 * (1 - k);
+    tutorial.handAlpha = 1 - k;   // fade out 1→0 as the hand presses away
     if (k >= 1) { tutorial.phase = 'idle'; tutorial.t = 0; }
   } else if (tutorial.phase === 'idle') {
     tutorial.ghostAlpha = 0;
     tutorial.pressDown = 0;
+    tutorial.handAlpha = 0;
     if (tutorial.t >= tutorial.IDLE_DUR) { tutorial.phase = 'approach'; tutorial.t = 0; }
   }
 }
@@ -1888,9 +2113,24 @@ function drawTutorialHand() {
   if (tutorial.dismissed) return;
   if (!handImgReady) return;
   if (won) return;
+  // Hide the tutorial hand + ghost item entirely while the player is mid-
+  // drag. Without this, the player sees TWO copies of the same item on
+  // screen at once — the one they're carrying at the cursor, and the
+  // tutorial's ghost animating along its path — which PM flagged as
+  // "indicates ANOTHER object of the same type." updateTutorial also
+  // freezes the state machine while drag is active so the hand resumes
+  // from 'idle' (with a brief settling pause) once the drag resolves.
+  if (drag) return;
   if (tutorial.phase === 'idle') return;
+  if (tutorial.handAlpha <= 0.01) return;   // effectively invisible
 
   const hX = tutorial.hX, hY = tutorial.hY;
+
+  // Wrap the entire hand+ghost draw in a save/restore that scales global
+  // alpha by tutorial.handAlpha — gives smooth fade-in on 'approach' and
+  // fade-out on 'release', so the hand never pops in or hard-cuts out.
+  ctx.save();
+  ctx.globalAlpha = ctx.globalAlpha * tutorial.handAlpha;
 
   // Ghost item — 50% alpha pear following the hand. Drawn first so the
   // hand sits ON TOP of it (more like the player's hand grabbing the item).
@@ -1912,6 +2152,8 @@ function drawTutorialHand() {
   ctx.translate(-hX, -hY);
   ctx.drawImage(handImg, hX - fingerOffX, hY - fingerOffY, w, h);
   ctx.restore();
+
+  ctx.restore();   // close the outer globalAlpha save
 }
 
 // ============================================================
