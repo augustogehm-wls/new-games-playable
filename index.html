@@ -1,8 +1,10 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-version="20260512-tutfix">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
 <title>Playables Hub — Catálogo</title>
 <style>
   :root {
@@ -263,7 +265,7 @@ function openModal(id) {
     content.innerHTML = `
       <div class="variations">
         ${c.variations.map(v => `
-          <a class="variation" href="${v.url}" target="_blank" rel="noopener">
+          <a class="variation" href="${v.url}${v.url.includes('?') ? '&' : '?'}_cb=${Date.now()}" target="_blank" rel="noopener">
             <div class="thumb">${v.thumb}</div>
             <div class="title">${v.title}</div>
             <div class="desc">${v.desc}</div>
@@ -290,6 +292,35 @@ document.addEventListener("keydown", e => {
 });
 
 render();
+</script>
+<script>
+// Self-healing cache check: GitHub Pages serves with Cache-Control: max-age=600,
+// so a freshly-pushed update may not be visible for up to 10 min after deploy
+// (PM has to hard-refresh, which is friction). On every page load, fetch the
+// page itself with cache-bypass and compare the live `data-version` against
+// the locally-rendered one. If they differ, the user is viewing a stale cached
+// copy — reload via location.replace with a unique query so the browser MUST
+// hit the network instead of serving from cache.
+(() => {
+  try {
+    const localVersion = document.documentElement.dataset.version || '';
+    const url = window.location.pathname + '?_freshness=' + Date.now();
+    fetch(url, { cache: 'no-store' })
+      .then(r => r.ok ? r.text() : null)
+      .then(html => {
+        if (!html) return;
+        const m = html.match(/data-version="([^"]+)"/);
+        const liveVersion = m ? m[1] : '';
+        if (liveVersion && localVersion && liveVersion !== localVersion) {
+          // Stale cache — reload with a cache-busting query so the browser
+          // can't satisfy this navigation from its own cache.
+          const target = window.location.pathname + '?_v=' + encodeURIComponent(liveVersion) + window.location.hash;
+          window.location.replace(target);
+        }
+      })
+      .catch(() => {});  // network failure → just leave the cached version alone
+  } catch (e) { /* defensive — never break the page over a cache check */ }
+})();
 </script>
 </body>
 </html>
