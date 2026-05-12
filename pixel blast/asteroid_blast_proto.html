@@ -4422,7 +4422,11 @@ class Game {
     txt.anchor.set(0.5);
     txt.position.set(12, 0);  // shift right of clock icon
     c.addChild(txt);
-    c.position.set(DESIGN_W / 2, 161);
+    // PM directive (2026-05-12): moved from top of canvas (y=161) to the
+    // gap between the frame bottom (y=825) and the slot row (y starts ~851).
+    // Centered around y=840 so it lives in the player's "focus area" between
+    // the action (belt around the grid) and the rest area (slots).
+    c.position.set(DESIGN_W / 2, 840);
     this._timerText = txt;
     return c;
   }
@@ -4461,7 +4465,9 @@ class Game {
     c.addChild(txt);
     // Positioned to the LEFT of the timer (timer is at DESIGN_W/2). 156 is the
     // timer width; we offset by half + a gap + half of our own width.
-    c.position.set(DESIGN_W / 2 - 156/2 - 12 - W/2, 161);
+    // Moved to y=840 same as the timer (PM directive 2026-05-12): both HUDs
+    // now sit between frame bottom and slot row, in the focus area.
+    c.position.set(DESIGN_W / 2 - 156/2 - 12 - W/2, 840);
     this._beltCounterText = txt;
     return c;
   }
