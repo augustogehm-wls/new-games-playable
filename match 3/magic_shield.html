@@ -22,15 +22,6 @@
 #__hogwarts_overlay .shield { left: 38%; top: 30%; width: 16%; height: 64%; z-index: 1; transform: rotate(-15deg); transform-origin: center; }
 /* Particles spawn at the edge of the shield curve (small left adjustment per PM v19→v20) */
 #__hogwarts_overlay .particle { left: 45%; top: 54%; width: 8%; height: 11%; z-index: 2; pointer-events: none; }
-/* Chamber-fade overlay: covers right-side chamber area, activated on fail */
-#__hogwarts_overlay .chamber-fade {
-  position: absolute;
-  left: 55%; top: 0; width: 45%; height: 80%;
-  background: radial-gradient(circle at 50% 50%, rgba(20,5,30,0.6), rgba(0,0,0,0.92));
-  opacity: 0; transition: opacity 0.7s ease-out;
-  pointer-events: none; z-index: 8;
-}
-#__hogwarts_overlay .chamber-fade.activated { opacity: 1; }
 /* Purple smoke particles at spike trap location (left side, behind Luna) */
 #__hogwarts_overlay .smoke {
   position: absolute;
@@ -202,11 +193,6 @@
     setInterval(spawnParticle, 130);
     spawnParticle();
 
-    // === Chamber-fade overlay: hidden by default, activates on game fail ===
-    const chamberFade = document.createElement('div');
-    chamberFade.className = 'chamber-fade';
-    overlay.appendChild(chamberFade);
-
     // === Purple smoke particles directly above the spike trap (PM v21: more right + down) ===
     function spawnSmoke() {
       const s = document.createElement('div');
@@ -225,22 +211,9 @@
     }
     setInterval(spawnSmoke, 380);
     spawnSmoke();
-
-    // === Hook SDK 'finish' event → activate chamber fade ===
-    function hookFinish() {
-      const sdk = window.PlayableSDK;
-      if (sdk && typeof sdk.on === 'function') {
-        try {
-          sdk.on('finish', function(){
-            console.log('[hogwarts] game finish → activating chamber fade');
-            chamberFade.classList.add('activated');
-          });
-        } catch(e){}
-      } else {
-        setTimeout(hookFinish, 200);
-      }
-    }
-    hookFinish();
+    // (Chamber-fade-on-fail removed in v23 — SDK 'finish' fires on both win and fail,
+    // and the gameplay continues after 'Good job' wins, leaving the fade as a permanent
+    // gameplay blocker. Re-add when a fail-specific signal is identified.)
 
     // === Wand bone-tracked, visible on TOP of shield (z-index 3) ===
     const wand = document.createElement('img');
