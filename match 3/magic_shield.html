@@ -33,12 +33,14 @@
 /* Wand: 3x smaller per PM, transform-origin at GRIP, rotated upward (~-45deg) for vertical pose */
 #__hogwarts_overlay .wand   { left: 42%; top: 58%; width: 5%; height: 6%; z-index: 3; transform-origin: 10% 90%; }
 
-@media (orientation: portrait) {
-  #__hogwarts_overlay .shield { left: 22%; top: 60%; width: 56%; height: 18%; transform: rotate(90deg); transform-origin: center; }
-  #__hogwarts_overlay .hit    { left: 42%; top: 64%; width: 12%; height: 10%; }
-  #__hogwarts_overlay .trail  { left: 40%; top: 70%; width: 4%; height: 4%; }
-  #__hogwarts_overlay .wand   { left: 22%; top: 72%; width: 16%; height: 14%; transform-origin: 10% 90%; }
-}
+/* Portrait overrides driven by JS class (overlay.classList.toggle('portrait', canvasH > canvasW))
+   rather than @media (orientation: portrait). Why: the playable can letterbox or wrap the canvas
+   so viewport orientation != canvas orientation — the canvas aspect ratio is what determines
+   where game elements actually render. */
+#__hogwarts_overlay.portrait .shield { left: 22%; top: 60%; width: 56%; height: 18%; transform: rotate(90deg); transform-origin: center; }
+#__hogwarts_overlay.portrait .hit    { left: 42%; top: 64%; width: 12%; height: 10%; }
+#__hogwarts_overlay.portrait .trail  { left: 40%; top: 70%; width: 4%; height: 4%; }
+#__hogwarts_overlay.portrait .wand   { left: 22%; top: 72%; width: 16%; height: 14%; transform-origin: 10% 90%; }
 
 @keyframes hogwarts_shield_pulse {
   0%, 100% { opacity: 0.85; filter: brightness(1) drop-shadow(0 0 10px #4ee5d4); }
@@ -134,6 +136,11 @@
       overlay.style.width  = r.width + 'px';
       overlay.style.height = r.height + 'px';
       overlay.style.inset  = 'unset';
+      // Orientation class driven by canvas aspect ratio (NOT viewport orientation):
+      // viewport orientation can lag/diverge from the canvas when the SDK letterboxes
+      // or wraps the canvas, leaving the shield stuck in landscape rotation after a
+      // physical phone rotation. Canvas dims are what PIXI actually lays out against.
+      overlay.classList.toggle('portrait', r.height > r.width);
       if (c !== observedCanvas) {
         observedCanvas = c;
         try { new ResizeObserver(syncToCanvas).observe(c); } catch(e){}
