@@ -18,7 +18,9 @@
 #__hogwarts_overlay img.layer { object-fit: contain; }
 
 /* === Landscape === */
-/* Shield tilted -15deg (top tilts back toward Luna) */
+/* Shield position/size are set per-frame by JS (anchored to Luna's hand bone). The transform is
+   kept as CSS-default so the rotation+animation stack stays in one place. Initial left/top/size
+   give a sane look before tryAttach acquires the bone. */
 #__hogwarts_overlay .shield { left: 38%; top: 30%; width: 16%; height: 64%; z-index: 1; transform: rotate(-15deg); transform-origin: center; }
 /* Particles spawn at the edge of the shield curve (small left adjustment per PM v19→v20) */
 #__hogwarts_overlay .particle { left: 45%; top: 54%; width: 8%; height: 11%; z-index: 2; pointer-events: none; }
@@ -37,13 +39,9 @@
    rather than @media (orientation: portrait). Why: the playable can letterbox or wrap the canvas
    so viewport orientation != canvas orientation — the canvas aspect ratio is what determines
    where game elements actually render. */
-/* Portrait: shield PNG already points right naturally (convex side right). We want to KEEP
-   "pointing right" relative to the rotated phone — same as landscape — just resize to fit
-   the now tall+narrow canvas. NO 90° rotation: that overshoots and makes it point down. */
-#__hogwarts_overlay.portrait .shield { left: 28%; top: 35%; width: 28%; height: 42%; transform: rotate(-15deg); transform-origin: center; }
-#__hogwarts_overlay.portrait .hit    { left: 42%; top: 50%; width: 14%; height: 12%; }
-#__hogwarts_overlay.portrait .trail  { left: 38%; top: 56%; width: 6%; height: 6%; }
-#__hogwarts_overlay.portrait .wand   { left: 30%; top: 56%; width: 10%; height: 12%; transform-origin: 10% 90%; }
+/* Portrait overrides — all sizes/positions are JS-driven from spine bone + spike sprite,
+   so we only need to preserve the rotation tilt for the shield's pre-bone fallback frame. */
+#__hogwarts_overlay.portrait .shield { transform: rotate(-15deg); transform-origin: center; }
 
 @keyframes hogwarts_shield_pulse {
   0%, 100% { opacity: 0.85; filter: brightness(1) drop-shadow(0 0 10px #4ee5d4); }
@@ -180,39 +178,66 @@
     trail.style.animation = 'hogwarts_trail_pan 0.6s linear infinite';
     overlay.appendChild(trail);
 
-    // === Particle spawner replaces static hit ===
-    // Particles spawn at a fixed location (hit center), scale up while arcing upward,
-    // then fade out. Continuous emission every 300ms.
+    // === Shared state: shield + spike positions, updated by track() each frame ===
+    // These get set by track() from spine bone + spike sprite global coords (orientation-agnostic).
+    // Defaults are reasonable landscape-ish fallbacks until tryAttach runs.
+    let shieldCenterX = 0, shieldCenterY = 0;       // CSS px relative to overlay
+    let spikeSprite = null;                          // PIXI sprite for spike trap; assigned by tryAttach
+
+    // === Particle spawner — positioned at the CURRENT shield center (dynamic) ===
+    // Was: CSS-static at 45%/54%. Now: each particle is spawned with inline pixel
+    // coords matching shieldCenterX/Y, which track Luna's hand bone per frame.
     function spawnParticle() {
+      if (!shieldCenterX) return;  // bone not yet acquired
       const p = document.createElement('img');
       p.src = ASSETS.hit;
       p.className = 'layer particle';
       p.style.mixBlendMode = 'plus-lighter';
+      // Size proportional to smaller canvas dim so it scales sanely in both orientations
+      const ovW = overlay.offsetWidth, ovH = overlay.offsetHeight;
+      const pSize = Math.min(ovW, ovH) * 0.10;
+      p.style.left = (shieldCenterX - pSize / 2) + 'px';
+      p.style.top  = (shieldCenterY - pSize / 2) + 'px';
+      p.style.width = pSize + 'px';
+      p.style.height = pSize + 'px';
       // Random rotation per particle (set via CSS custom prop so keyframes preserve it)
       const rotDeg = Math.random() * 360;
       p.style.setProperty('--rot', rotDeg.toFixed(0) + 'deg');
       // Speed jitter on duration
       const speedJitter = 1 + (Math.random() - 0.5) * 0.25;
-      // Lifetime 0.3s (1/3 of previous 0.9s per PM)
       const dur = (0.30 * speedJitter).toFixed(2);
       p.style.animation = 'hogwarts_particle_arc ' + dur + 's ease-out forwards';
       overlay.appendChild(p);
       setTimeout(function(){ p.remove(); }, 400);
     }
-    // Faster spawn rate to keep visible density now that lifetime is 1/3
     setInterval(spawnParticle, 130);
-    spawnParticle();
 
-    // === Purple smoke particles directly above the spike trap (PM v21: more right + down) ===
+    // === Purple smoke — spawned at the spike sprite's GLOBAL bounds when available ===
+    // The spike is a PIXI sprite (texture ~188×305 from spike_purple.png swap). Finding it
+    // in the scene graph each frame lets us anchor smoke to the spike's screen-space
+    // position regardless of canvas orientation. Falls back to landscape %-coords if not found.
     function spawnSmoke() {
+      const ovW = overlay.offsetWidth, ovH = overlay.offsetHeight;
+      if (!ovW) return;
       const s = document.createElement('div');
       s.className = 'smoke';
-      // Spawn ON TOP of the spikes (which render at ~22-26% x, ~70-80% y of canvas)
-      const x = 22 + Math.random() * 6;   // 22-28% horizontal (directly over the spikes)
-      const y = 68 + Math.random() * 8;   // 68-76% vertical (at/above spike tips)
-      const size = 8 + Math.random() * 6;
-      // Purple smoke with dark core (radial gradient)
-      s.style.cssText = 'left:' + x + '%; top:' + y + '%; width:' + size + '%; height:' + size + '%; ' +
+      let x, y, size;
+      if (spikeSprite && spikeSprite.parent) {
+        try {
+          const b = spikeSprite.getBounds();
+          // Spawn at the TIP region of the spike (top portion in landscape, may differ in portrait)
+          x = b.x + b.width  * (0.3 + Math.random() * 0.4);
+          y = b.y + b.height * (0.05 + Math.random() * 0.20);
+          size = b.width * (1.0 + Math.random() * 0.6);
+        } catch (e) { spikeSprite = null; }
+      }
+      if (size === undefined) {
+        // Fallback: landscape-tuned %-coords (NOT correct in portrait — gives best-effort)
+        x = ovW * (0.22 + Math.random() * 0.06);
+        y = ovH * (0.68 + Math.random() * 0.08);
+        size = Math.min(ovW, ovH) * (0.10 + Math.random() * 0.06);
+      }
+      s.style.cssText = 'left:' + x + 'px; top:' + y + 'px; width:' + size + 'px; height:' + size + 'px; ' +
         'background: radial-gradient(circle, rgba(40,10,60,0.85) 0%, rgba(120,40,180,0.7) 35%, rgba(140,60,200,0.3) 70%, transparent 100%); ' +
         'border-radius: 50%; ' +
         'animation: hogwarts_smoke_rise 2.2s ease-out forwards;';
@@ -220,7 +245,6 @@
       setTimeout(function(){ s.remove(); }, 2400);
     }
     setInterval(spawnSmoke, 380);
-    spawnSmoke();
     // (Chamber-fade-on-fail removed in v23 — SDK 'finish' fires on both win and fail,
     // and the gameplay continues after 'Good job' wins, leaving the fade as a permanent
     // gameplay blocker. Re-add when a fail-specific signal is identified.)
@@ -270,6 +294,22 @@
         if (darkShield.alpha !== undefined) darkShield.alpha = 0;
         console.log('[hogwarts] hid default dark-blue shield (parent=' + (darkShield.parent && darkShield.parent.constructor.name) + ')');
       }
+
+      // Find spike sprite (purple spike texture is 188×305 — narrower than dark shield's 350-500 H,
+      // so no collision with findShieldRec range). Smoke spawning will use its global bounds.
+      function findSpikeRec(node) {
+        if (!node) return null;
+        if (node.texture && !(node.skeleton && node.state)) {
+          const t = node.texture;
+          const texW = t.source ? t.source.width : (t.baseTexture ? t.baseTexture.width : 0);
+          const texH = t.source ? t.source.height : (t.baseTexture ? t.baseTexture.height : 0);
+          if (texW > 180 && texW < 200 && texH > 295 && texH < 315) return node;
+        }
+        if (node.children) for (const c of node.children) { const r = findSpikeRec(c); if (r) return r; }
+        return null;
+      }
+      spikeSprite = findSpikeRec(app.stage);
+      console.log('[hogwarts] spike sprite found:', !!spikeSprite);
 
       // Track hand1 bone for Trail's Point A
       const handBoneNames = ['hand1', 'hand2', 'hand3a', 'hand3', 'palm1', 'palm2'];
@@ -328,9 +368,26 @@
           const gripShiftY = wandH * (0.90 - 0.55);  // 0.35 * wandH (how much the visual grip moved down)
           const ax = handX + rotTipX;
           const ay = handY + rotTipY + gripShiftY;
-          // Point B: hit center (47.5%, 60%)
-          const bx = ovW * 0.475;
-          const by = ovH * 0.60;
+          // === Shield positioned dynamically (anchored to Luna's hand bone) ===
+          // Sized proportional to smaller canvas dim so it scales identically in both orientations.
+          // Anchor: shield center is offset above-right of the hand, so the shield "floats"
+          // in front of Luna (between her and the chamber) at a consistent body-relative spot.
+          const refDim = Math.min(ovW, ovH);
+          const shieldH = refDim * 0.55;
+          const shieldW = shieldH * 0.42;
+          // Center offsets: a bit to the right (toward chamber) and well above hand (in front of body)
+          const cx = handX + refDim * 0.05;
+          const cy = handY - shieldH * 0.30;
+          shield.style.left   = (cx - shieldW * 0.5) + 'px';
+          shield.style.top    = (cy - shieldH * 0.5) + 'px';
+          shield.style.width  = shieldW + 'px';
+          shield.style.height = shieldH + 'px';
+          // Publish to shared state so particle spawner can target the shield
+          shieldCenterX = cx;
+          shieldCenterY = cy;
+          // Trail Point B = shield center (was hardcoded 47.5% × 60%)
+          const bx = cx;
+          const by = cy;
           // Trail line: width = distance, rotated to angle, origin at A
           const dx = bx - ax;
           const dy = by - ay;
