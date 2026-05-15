@@ -389,17 +389,25 @@
         // Chamber wall +50 shift is applied ONCE in tryFindWall (above) — static body, no
         // need to re-set every frame. If the game logic re-resets the wall position, we may
         // need to re-apply here, but typical Match Factory chamber walls don't move.
-        // End-card watchdog: when win_circle or fail_circle becomes visible, hide overlay
-        // AND auto-reload the page after 3s so the game restarts (PM v19: end card is a
-        // dead screen otherwise — CTA URL is killed, so without reload nothing happens).
+        // End-card watchdog: hide overlay early (before end-card) when Luna's "die" animation plays,
+        // or when win_circle/fail_circle becomes visible. AND auto-reload page 3s after either,
+        // so the game restarts (PM v19: end card is a dead screen otherwise — CTA URL is killed).
         if (!gameEnded) {
           if (!failCircle) failCircle = findSpriteByTextureKey(app.stage, 'fail_circle');
           if (!winCircle)  winCircle  = findSpriteByTextureKey(app.stage, 'win_circle');
           let ended = null;
-          if (failCircle && failCircle.visible && failCircle.scale && failCircle.scale.x > 0) ended = 'fail_circle';
-          else if (winCircle && winCircle.visible && winCircle.scale && winCircle.scale.x > 0) ended = 'win_circle';
+          // PM v19c: detect spine 'die' animation BEFORE the fail_circle scale-pops in.
+          // Luna's fall animation hides the visual character; our overlay (shield + wand + particles)
+          // would otherwise hang in place looking detached. Triggered ~600ms earlier than fail_circle.
+          if (spine && spine.state && spine.state.tracks && spine.state.tracks[0]) {
+            const _t0 = spine.state.tracks[0];
+            const _an = _t0 && _t0.animation && _t0.animation.name;
+            if (_an === 'die') ended = 'die-anim';
+          }
+          if (!ended && failCircle && failCircle.visible && failCircle.scale && failCircle.scale.x > 0) ended = 'fail_circle';
+          else if (!ended && winCircle && winCircle.visible && winCircle.scale && winCircle.scale.x > 0) ended = 'win_circle';
           if (ended) {
-            hideOverlay(ended + ' visible');
+            hideOverlay(ended + ' detected');
             setTimeout(function(){
               console.log('[hogwarts] auto-reload after ' + ended);
               try { window.location.reload(); } catch(e){}
