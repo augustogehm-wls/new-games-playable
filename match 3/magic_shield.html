@@ -434,13 +434,12 @@
           shieldCenterX = cx;
           shieldCenterY = cy;
           // Shield's convex crescent peak (where the wand's magic strikes the shield rim).
-          // The hud_shield.png is 399×600 with NO transparent padding — the convex curve
-          // reaches the bounding-box's right edge, so the rim is at cx + shieldW * 0.5.
-          // Pull back 5% for a slight inset (the cyan glow extends a bit past the rim itself).
-          // The -15° rotation lifts the visual right-middle point slightly up by ~sin(15°)≈0.26;
-          // compensate by raising shieldHitY by 0.13 × shieldW (= half of 0.26 × shieldW/2 ≈ shieldW × 0.065).
-          shieldHitX = cx + shieldW * 0.45;
-          shieldHitY = cy - shieldW * 0.065;
+          // hud_shield.png is 399×600 with no transparent padding, so the rim is at
+          // cx + shieldW * 0.5 in the unrotated frame. PM v11 said shieldW * 0.45 overshot
+          // outside the rim — refined to 0.30 ("less than half" of the v10→v11 advance).
+          // The -15° rotation lifts the visual right-middle point slightly up; compensate.
+          shieldHitX = cx + shieldW * 0.30;
+          shieldHitY = cy - shieldW * 0.045;
           // Trail Point B = the shield's hit point (where particles burst), not bare center.
           const bx = shieldHitX;
           const by = shieldHitY;
