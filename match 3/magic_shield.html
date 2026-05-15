@@ -323,7 +323,20 @@
         darkShield.visible = false;
         darkShield.renderable = false;
         if (darkShield.alpha !== undefined) darkShield.alpha = 0;
-        console.log('[hogwarts] hid default dark-blue shield (parent=' + (darkShield.parent && darkShield.parent.constructor.name) + ')');
+        // PM v13: ALSO shift the shield local position.x by +60 to push the bone-tracked
+        // physics collider (the shieldPhysicsBody) further right. Per the readable script
+        // (line 36006-36019), this.shield is the visual PIXI sprite at local (52,-40) within
+        // the hand2-base spine slot, and a child container at (20,0) inside it anchors
+        // the Matter body (synced by the rigid-body class Ph). Shifting the shield local x
+        // by +60 moves the entire subtree, the child global moves, the synced body moves.
+        // Shield is angled -35°, so +60 local ≈ +49 world after rotation. PM wanted ~+50 px.
+        const SHIELD_COLLIDER_DX = 60;
+        if (typeof darkShield.position.x === 'number') {
+          const origLocalX = darkShield.position.x;
+          darkShield.position.x = origLocalX + SHIELD_COLLIDER_DX;
+          console.log('[hogwarts] shield collider shifted: local.x ' + origLocalX + ' → ' + darkShield.position.x);
+        }
+        console.log('[hogwarts] hid + shifted default dark-blue shield (parent=' + (darkShield.parent && darkShield.parent.constructor.name) + ')');
       }
 
       // Find spike sprite (purple spike texture is 188×305 — narrower than dark shield's 350-500 H,
@@ -366,79 +379,10 @@
       const canvas = findCanvas();
       if (!canvas) return;
 
-      // === Matter.js chamber-wall finder + manual repositioning (PM v12 collider push) ===
-      // PM asked to push item-holding collider ~50 px to the right. Earlier slider had no
-      // visible effect because we required window.Matter (not exposed by the webpack bundle).
-      // Fix: do manual position+bounds+vertices mutation, no global Matter dependency.
-      const CHAMBER_WALL_DX = 50;  // PM v12: +50 px shift right
-      let chamberWalls = [];        // ALL static vertical walls — applied as a group
-      let chamberWallOrigPositions = [];
-      function findMatterEngine() {
-        const candidates = [
-          window.app && window.app.physics && window.app.physics.engine,
-          window.app && window.app.physics,
-          window.app && window.app.matter && window.app.matter.engine,
-          window.app && window.app.matter,
-          window.app && window.app.engine,
-          window.engine
-        ];
-        for (const c of candidates) if (c && c.world && c.world.bodies) return c;
-        for (const k of Object.keys(window)) {
-          try {
-            const v = window[k];
-            if (v && typeof v === 'object' && v.world && Array.isArray(v.world.bodies)) return v;
-          } catch(e){}
-        }
-        return null;
-      }
-      function findVerticalStaticBodies(engine) {
-        if (!engine || !engine.world) return [];
-        const bodies = engine.world.bodies || [];
-        const verticals = bodies.filter(function(b){
-          if (!b.isStatic) return false;
-          const w = b.bounds.max.x - b.bounds.min.x;
-          const h = b.bounds.max.y - b.bounds.min.y;
-          return h > w * 2 && h > 100;
-        });
-        verticals.sort(function(a,b){ return a.position.x - b.position.x; });
-        return verticals;
-      }
-      function moveBodyXBy(body, dx) {
-        // No Matter.Body.setPosition dependency — mutate position, vertices, bounds, parts directly.
-        body.position.x += dx;
-        if (body.vertices) for (const v of body.vertices) v.x += dx;
-        if (body.bounds) { body.bounds.min.x += dx; body.bounds.max.x += dx; }
-        if (body.parts) for (let i = 0; i < body.parts.length; i++) {
-          const p = body.parts[i];
-          if (p === body) continue;
-          p.position.x += dx;
-          if (p.vertices) for (const v of p.vertices) v.x += dx;
-          if (p.bounds) { p.bounds.min.x += dx; p.bounds.max.x += dx; }
-        }
-      }
-      let matterTries = 0;
-      function tryFindWall() {
-        matterTries++;
-        if (chamberWalls.length > 0 || matterTries > 300) return;
-        const eng = findMatterEngine();
-        if (eng) {
-          const verts = findVerticalStaticBodies(eng);
-          try { console.log('[hogwarts] all vertical static bodies:', verts.map(function(b){ return {x:Math.round(b.position.x), y:Math.round(b.position.y), w:Math.round(b.bounds.max.x-b.bounds.min.x), h:Math.round(b.bounds.max.y-b.bounds.min.y)}; })); } catch(e){}
-          if (verts.length > 0) {
-            // Pick just the LEFTMOST vertical wall (chamber's inner-left wall is the typical target).
-            // If wrong, we can switch to verts[1] etc later — diagnostic log will tell us.
-            chamberWalls = [verts[0]];
-            chamberWallOrigPositions = chamberWalls.map(function(b){ return b.position.x; });
-            // Apply the shift ONCE here (manual mutation persists since the body is static).
-            for (let i = 0; i < chamberWalls.length; i++) {
-              moveBodyXBy(chamberWalls[i], CHAMBER_WALL_DX);
-            }
-            console.log('[hogwarts] chamber wall(s) shifted +' + CHAMBER_WALL_DX + ' px. orig x=' + chamberWallOrigPositions.join(','));
-          }
-        }
-        if (chamberWalls.length === 0) setTimeout(tryFindWall, 200);
-      }
-      tryFindWall();
+      // (Chamber-wall shifting code removed in v13. The real item-holding collider is the
+      //  shield physics body, bone-tracked, attached to the spine slot, handled above by
+      //  shifting darkShield.position.x in the findShieldRec block. The Ph rigid body
+      //  syncs its body position from the shield-subtree global, so the shift carries.)
 
       function track() {
         // Chamber wall +50 shift is applied ONCE in tryFindWall (above) — static body, no
@@ -453,16 +397,22 @@
           else if (winCircle && winCircle.visible && winCircle.scale && winCircle.scale.x > 0) hideOverlay('win_circle visible');
         }
         // Per-frame watchdog: re-hide dark shield (visible + renderable + alpha=0 for triple lock)
+        // + re-enforce the +60 local.x shift to push the bone-tracked physics body right.
+        const SHIELD_TARGET_LOCAL_X = 52 + 60;  // original 52 (from script line 36006) + PM v13 shift
         if (darkShield) {
           if (darkShield.visible !== false) darkShield.visible = false;
           if (darkShield.renderable !== false) darkShield.renderable = false;
           if (darkShield.alpha !== 0) darkShield.alpha = 0;
+          if (darkShield.position && Math.abs(darkShield.position.x - SHIELD_TARGET_LOCAL_X) > 1) {
+            darkShield.position.x = SHIELD_TARGET_LOCAL_X;
+          }
         } else {
           darkShield = findShieldRec(app.stage);
           if (darkShield) {
             darkShield.visible = false;
             darkShield.renderable = false;
             darkShield.alpha = 0;
+            if (darkShield.position) darkShield.position.x = SHIELD_TARGET_LOCAL_X;
           }
         }
         if (handBone && spine && canvas && overlay.offsetWidth > 0) {
