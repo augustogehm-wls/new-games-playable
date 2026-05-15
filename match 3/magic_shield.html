@@ -194,6 +194,7 @@
     // These get set by track() from spine bone + spike sprite global coords (orientation-agnostic).
     // Defaults are reasonable landscape-ish fallbacks until tryAttach runs.
     let shieldCenterX = 0, shieldCenterY = 0;       // CSS px relative to overlay
+    let shieldHitX = 0, shieldHitY = 0;              // CSS px — where particles spawn (convex crescent peak)
     let spikeSprite = null;                          // PIXI sprite for spike trap; assigned by tryAttach
 
     // === Particle spawner — positioned at the CURRENT shield center (dynamic) ===
@@ -208,10 +209,10 @@
       // Size proportional to smaller canvas dim so it scales sanely in both orientations
       const ovW = overlay.offsetWidth, ovH = overlay.offsetHeight;
       const pSize = Math.min(ovW, ovH) * 0.10;
-      // PM v9: hit nudged further right of shield center (1% → 2.5% of refDim).
-      const hitOffsetX = Math.min(ovW, ovH) * 0.025;
-      p.style.left = (shieldCenterX + hitOffsetX - pSize / 2) + 'px';
-      p.style.top  = (shieldCenterY - pSize / 2) + 'px';
+      // PM v10: anchor hit at shieldHit (convex crescent peak — computed from shieldW each frame in track()).
+      // This makes the hit auto-track shield resizing and lands precisely at the shield's right edge.
+      p.style.left = (shieldHitX - pSize / 2) + 'px';
+      p.style.top  = (shieldHitY - pSize / 2) + 'px';
       p.style.width = pSize + 'px';
       p.style.height = pSize + 'px';
       // Random rotation per particle (set via CSS custom prop so keyframes preserve it)
@@ -432,9 +433,17 @@
           // Publish to shared state so particle spawner can target the shield
           shieldCenterX = cx;
           shieldCenterY = cy;
-          // Trail Point B = shield center (was hardcoded 47.5% × 60%)
-          const bx = cx;
-          const by = cy;
+          // Shield's convex crescent peak (where the wand's magic strikes the shield rim).
+          // The hud_shield.png is 399×600 with NO transparent padding — the convex curve
+          // reaches the bounding-box's right edge, so the rim is at cx + shieldW * 0.5.
+          // Pull back 5% for a slight inset (the cyan glow extends a bit past the rim itself).
+          // The -15° rotation lifts the visual right-middle point slightly up by ~sin(15°)≈0.26;
+          // compensate by raising shieldHitY by 0.13 × shieldW (= half of 0.26 × shieldW/2 ≈ shieldW × 0.065).
+          shieldHitX = cx + shieldW * 0.45;
+          shieldHitY = cy - shieldW * 0.065;
+          // Trail Point B = the shield's hit point (where particles burst), not bare center.
+          const bx = shieldHitX;
+          const by = shieldHitY;
           // Trail line: width = distance, rotated to angle, origin at A
           const dx = bx - ax;
           const dy = by - ay;
