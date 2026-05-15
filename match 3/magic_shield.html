@@ -455,9 +455,12 @@
           // PM v9: trail Point A nudged slightly RIGHT (~15% of wandW) so it lands precisely
           // on the wand's bright tip rather than just to its left.
           // Bake history: v12 = (-39, +12), v16 PM verified-desktop X delta +24 → (-15, +12).
-          // All offsets scaled by calS for cross-device proportionality.
+          // v16c: PM said mobile still needed +15 right (linear calS scaling alone didn't catch
+          // a screen-aspect quirk on smaller canvases). Added a mobile-only lerp: 0 extra at
+          // refDim ≥ 700 (desktop), +15 at refDim ≤ 350 (mobile portrait), linear between.
           const tipShiftX = wandW * 0.15;
-          const ax = handX + rotTipX + tipShiftX + (-15 * calS);
+          const _mobileTrailDX = Math.max(0, Math.min(15, 15 * (700 - _refDimNow) / 350));
+          const ax = handX + rotTipX + tipShiftX + (-15 * calS) + _mobileTrailDX;
           const ay = handY + rotTipY + gripShiftY + (12 * calS);
           // === Shield positioned dynamically (anchored to Luna's hand bone) ===
           // Sized proportional to smaller canvas dim so it scales identically in both orientations.
