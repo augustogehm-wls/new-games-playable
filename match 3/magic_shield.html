@@ -37,10 +37,13 @@
    rather than @media (orientation: portrait). Why: the playable can letterbox or wrap the canvas
    so viewport orientation != canvas orientation — the canvas aspect ratio is what determines
    where game elements actually render. */
-#__hogwarts_overlay.portrait .shield { left: 22%; top: 60%; width: 56%; height: 18%; transform: rotate(90deg); transform-origin: center; }
-#__hogwarts_overlay.portrait .hit    { left: 42%; top: 64%; width: 12%; height: 10%; }
-#__hogwarts_overlay.portrait .trail  { left: 40%; top: 70%; width: 4%; height: 4%; }
-#__hogwarts_overlay.portrait .wand   { left: 22%; top: 72%; width: 16%; height: 14%; transform-origin: 10% 90%; }
+/* Portrait: shield PNG already points right naturally (convex side right). We want to KEEP
+   "pointing right" relative to the rotated phone — same as landscape — just resize to fit
+   the now tall+narrow canvas. NO 90° rotation: that overshoots and makes it point down. */
+#__hogwarts_overlay.portrait .shield { left: 28%; top: 35%; width: 28%; height: 42%; transform: rotate(-15deg); transform-origin: center; }
+#__hogwarts_overlay.portrait .hit    { left: 42%; top: 50%; width: 14%; height: 12%; }
+#__hogwarts_overlay.portrait .trail  { left: 38%; top: 56%; width: 6%; height: 6%; }
+#__hogwarts_overlay.portrait .wand   { left: 30%; top: 56%; width: 10%; height: 12%; transform-origin: 10% 90%; }
 
 @keyframes hogwarts_shield_pulse {
   0%, 100% { opacity: 0.85; filter: brightness(1) drop-shadow(0 0 10px #4ee5d4); }
