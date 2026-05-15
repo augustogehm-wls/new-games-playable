@@ -258,9 +258,11 @@
         y = ovH * (0.68 + Math.random() * 0.08);
         size = Math.min(ovW, ovH) * (0.10 + Math.random() * 0.06);
       }
-      // Baked smoke offset (PM v12 slider-tuned final: -53 px X, +27 px Y from spike-bounds anchor)
-      x += -53;
-      y += 27;
+      // Baked smoke offset (PM v12 slider-tuned final: -53 px X, +27 px Y from spike-bounds anchor),
+      // scaled v15 by calS so the same proportional placement holds on mobile (smaller refDim).
+      const _calS = Math.min(ovW, ovH) / 700;
+      x += -53 * _calS;
+      y += 27 * _calS;
       // Layer-generated realistic smoke texture (transparent PNG, dense purple volumetric)
       // replaces the previous CSS radial-gradient. Random rotation per puff via CSS variable
       // (consumed by hogwarts_smoke_rise keyframe so it survives the translateY+scale animation).
@@ -421,6 +423,13 @@
           const ovH = overlay.offsetHeight;
           const handX = p.x;
           const handY = p.y;
+          // PM v15 calibration baseline: the bake offsets below were tuned on a desktop browser
+          // canvas where refDim ≈ 700 px. We scale all px offsets by (current_refDim / baseline)
+          // so the same proportional placement holds on smaller (mobile) and larger canvases.
+          // Adjust CAL_BASELINE if mobile is consistently still off.
+          const CAL_BASELINE = 700;
+          const _refDimNow = Math.min(ovW, ovH);
+          const calS = _refDimNow / CAL_BASELINE;
           // === Wand: grip slightly DOWN from raw hand1 position (PM: wand was too high) ===
           // Hand bone is at the wrist; wand grip should be at fingertips (a bit lower in screen y).
           // Offset the visual grip down by ~30% of wand height beyond the hand bone.
@@ -446,10 +455,10 @@
           const gripShiftY = wandH * (0.90 - 0.55);  // 0.35 * wandH (how much the visual grip moved down)
           // PM v9: trail Point A nudged slightly RIGHT (~15% of wandW) so it lands precisely
           // on the wand's bright tip rather than just to its left.
-          // PM v12 final bake: -39 px X, +12 px Y from slider tuning.
+          // PM v12 final bake: -39 px X, +12 px Y from slider tuning, scaled v15 by calS.
           const tipShiftX = wandW * 0.15;
-          const ax = handX + rotTipX + tipShiftX - 39;
-          const ay = handY + rotTipY + gripShiftY + 12;
+          const ax = handX + rotTipX + tipShiftX + (-39 * calS);
+          const ay = handY + rotTipY + gripShiftY + (12 * calS);
           // === Shield positioned dynamically (anchored to Luna's hand bone) ===
           // Sized proportional to smaller canvas dim so it scales identically in both orientations.
           // Anchor: shield center is offset above-right of the hand, so the shield "floats"
@@ -460,9 +469,9 @@
           const shieldW = shieldH * 0.42;
           // Center offsets (PM v5→v6 tuning): pulled DOWN and slightly LEFT toward Luna.
           // Was right 5%/up 30%; now right 2%/up 10% — shield sits at chest level, not floating.
-          // PM v12 final bake: +12 px X, +27 px Y from slider tuning.
-          const cx = handX + refDim * 0.02 + 12;
-          const cy = handY - shieldH * 0.10 + 27;
+          // PM v12 final bake: +12 px X, +27 px Y from slider tuning, scaled v15 by calS.
+          const cx = handX + refDim * 0.02 + (12 * calS);
+          const cy = handY - shieldH * 0.10 + (27 * calS);
           shield.style.left   = (cx - shieldW * 0.5) + 'px';
           shield.style.top    = (cy - shieldH * 0.5) + 'px';
           shield.style.width  = shieldW + 'px';
@@ -475,8 +484,8 @@
           // cx + shieldW * 0.5 in the unrotated frame. PM v11 said shieldW * 0.45 overshot
           // outside the rim — refined to 0.30 ("less than half" of the v10→v11 advance).
           // The -15° rotation lifts the visual right-middle point slightly up; compensate.
-          // PM v12 final bake: -16 px X, 0 Y from slider tuning.
-          shieldHitX = cx + shieldW * 0.30 - 16;
+          // PM v12 final bake: -16 px X, 0 Y from slider tuning, scaled v15 by calS.
+          shieldHitX = cx + shieldW * 0.30 + (-16 * calS);
           shieldHitY = cy - shieldW * 0.045;
           // Trail Point B = the shield's hit point (where particles burst), not bare center.
           const bx = shieldHitX;
