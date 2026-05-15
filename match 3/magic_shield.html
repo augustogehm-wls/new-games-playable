@@ -139,7 +139,7 @@
     overlayEl = overlay;
     if (window.__hogwarts_reveal_pending) overlay.classList.add('shown');
 
-    // (Slider panel removed — Trail A X re-baked at v16 with PM's +24 delta → final -15.)
+    // (Slider panel removed — v16d PM-tuned values baked as mobileLerp deltas at use sites.)
 
     function findCanvas() { return document.querySelector('#game canvas') || document.querySelector('canvas'); }
     let observedCanvas = null;
@@ -429,14 +429,21 @@
           const CAL_BASELINE = 700;
           const _refDimNow = Math.min(ovW, ovH);
           const calS = _refDimNow / CAL_BASELINE;
+          // mobileLerp: 0 on desktop (refDim ≥ 700), 1 on mobile portrait (refDim ≤ 350), smooth between.
+          // Used as a multiplier for mobile-only correction deltas tuned on PM's actual phone.
+          const mobileLerp = Math.max(0, Math.min(1, (700 - _refDimNow) / 350));
           // === Wand: grip slightly DOWN from raw hand1 position (PM: wand was too high) ===
           // Hand bone is at the wrist; wand grip should be at fingertips (a bit lower in screen y).
           // Offset the visual grip down by ~30% of wand height beyond the hand bone.
-          // PM v8: thicker wand for visibility (5%×6% → 7%×8.5%, ~1.4× scale)
-          const wandW = ovW * 0.07;
-          const wandH = ovH * 0.085;
-          wand.style.left = (handX - wandW * 0.10) + 'px';
-          wand.style.top  = (handY - wandH * 0.55) + 'px';  // was -0.90, now -0.55 (less up)
+          // PM v8: thicker wand for visibility (5%×6% → 7%×8.5%).
+          // PM v16d: switched wand sizing from (ovW*0.07, ovH*0.085) to refDim-based so the wand
+          // aspect ratio + downstream offsets (rotTipX, tipShiftX, gripShiftY) stay invariant
+          // across portrait/landscape — fixes "wand out of place" on mobile aspect ratios.
+          // PM v16d slider tuning (mobile-only deltas, scaled by mobileLerp): X +21, Y -27.
+          const wandW = _refDimNow * 0.08;
+          const wandH = _refDimNow * 0.10;
+          wand.style.left = (handX - wandW * 0.10 + 21 * mobileLerp) + 'px';
+          wand.style.top  = (handY - wandH * 0.55 + (-27) * mobileLerp) + 'px';
           wand.style.width = wandW + 'px';
           wand.style.height = wandH + 'px';
           // === Trail Point A = wand tip after rotation ===
@@ -458,10 +465,11 @@
           // v16c: PM said mobile still needed +15 right (linear calS scaling alone didn't catch
           // a screen-aspect quirk on smaller canvases). Added a mobile-only lerp: 0 extra at
           // refDim ≥ 700 (desktop), +15 at refDim ≤ 350 (mobile portrait), linear between.
+          // PM v16d slider tuning (mobile-only deltas): Trail A X +32, Y -41 on top of existing bake.
+          // The earlier v16c lerp (+15 on mobile X) is folded into this: 15 + 32 = 47 total mobileLerp X.
           const tipShiftX = wandW * 0.15;
-          const _mobileTrailDX = Math.max(0, Math.min(15, 15 * (700 - _refDimNow) / 350));
-          const ax = handX + rotTipX + tipShiftX + (-15 * calS) + _mobileTrailDX;
-          const ay = handY + rotTipY + gripShiftY + (12 * calS);
+          const ax = handX + rotTipX + tipShiftX + (-15 * calS) + (47 * mobileLerp);
+          const ay = handY + rotTipY + gripShiftY + (12 * calS) + ((-41) * mobileLerp);
           // === Shield positioned dynamically (anchored to Luna's hand bone) ===
           // Sized proportional to smaller canvas dim so it scales identically in both orientations.
           // Anchor: shield center is offset above-right of the hand, so the shield "floats"
