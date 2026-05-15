@@ -208,9 +208,8 @@
       // Size proportional to smaller canvas dim so it scales sanely in both orientations
       const ovW = overlay.offsetWidth, ovH = overlay.offsetHeight;
       const pSize = Math.min(ovW, ovH) * 0.10;
-      // PM v8: reverse the v7 left-nudge — pull hit slightly RIGHT of shield center (~1% of refDim).
-      // Net effect vs v7: ~4% rightward shift.
-      const hitOffsetX = Math.min(ovW, ovH) * 0.01;
+      // PM v9: hit nudged further right of shield center (1% → 2.5% of refDim).
+      const hitOffsetX = Math.min(ovW, ovH) * 0.025;
       p.style.left = (shieldCenterX + hitOffsetX - pSize / 2) + 'px';
       p.style.top  = (shieldCenterY - pSize / 2) + 'px';
       p.style.width = pSize + 'px';
@@ -409,7 +408,10 @@
           // Tip lands at the wand's natural tip position (computed from grip+rotation).
           // Also account for the wand's downward offset (we shifted grip down by 35% of wandH).
           const gripShiftY = wandH * (0.90 - 0.55);  // 0.35 * wandH (how much the visual grip moved down)
-          const ax = handX + rotTipX;
+          // PM v9: trail Point A nudged slightly RIGHT (~15% of wandW) so it lands precisely
+          // on the wand's bright tip rather than just to its left.
+          const tipShiftX = wandW * 0.15;
+          const ax = handX + rotTipX + tipShiftX;
           const ay = handY + rotTipY + gripShiftY;
           // === Shield positioned dynamically (anchored to Luna's hand bone) ===
           // Sized proportional to smaller canvas dim so it scales identically in both orientations.
