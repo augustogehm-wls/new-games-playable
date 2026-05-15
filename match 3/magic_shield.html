@@ -389,13 +389,22 @@
         // Chamber wall +50 shift is applied ONCE in tryFindWall (above) — static body, no
         // need to re-set every frame. If the game logic re-resets the wall position, we may
         // need to re-apply here, but typical Match Factory chamber walls don't move.
-        // End-card watchdog: when win_circle or fail_circle becomes visible, hide overlay.
-        // Searching every frame is cheap and resilient to scene-graph re-creation.
+        // End-card watchdog: when win_circle or fail_circle becomes visible, hide overlay
+        // AND auto-reload the page after 3s so the game restarts (PM v19: end card is a
+        // dead screen otherwise — CTA URL is killed, so without reload nothing happens).
         if (!gameEnded) {
           if (!failCircle) failCircle = findSpriteByTextureKey(app.stage, 'fail_circle');
           if (!winCircle)  winCircle  = findSpriteByTextureKey(app.stage, 'win_circle');
-          if (failCircle && failCircle.visible && failCircle.scale && failCircle.scale.x > 0) hideOverlay('fail_circle visible');
-          else if (winCircle && winCircle.visible && winCircle.scale && winCircle.scale.x > 0) hideOverlay('win_circle visible');
+          let ended = null;
+          if (failCircle && failCircle.visible && failCircle.scale && failCircle.scale.x > 0) ended = 'fail_circle';
+          else if (winCircle && winCircle.visible && winCircle.scale && winCircle.scale.x > 0) ended = 'win_circle';
+          if (ended) {
+            hideOverlay(ended + ' visible');
+            setTimeout(function(){
+              console.log('[hogwarts] auto-reload after ' + ended);
+              try { window.location.reload(); } catch(e){}
+            }, 3000);
+          }
         }
         // Per-frame watchdog: re-hide dark shield (visible + renderable + alpha=0 for triple lock)
         // + re-enforce the +60 local.x shift to push the bone-tracked physics body right.
