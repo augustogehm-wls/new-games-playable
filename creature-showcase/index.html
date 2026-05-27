@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Creature Showcase</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ===========================================================
+       CREATURE SHOWCASE
+       A visual handoff document. Shows one isolated creature that
+       loops between a SAD state and a HAPPY (rescued) state.
+       Tap the button to toggle. Arrows are placeholders for future
+       creatures. See README.md for how the engineer reuses these assets.
+       =========================================================== -->
+
+  <main id="stage">
+    <!-- Creature name label -->
+    <header id="topbar">
+      <span id="creatureName">Blue Dragon</span>
+    </header>
+
+    <!-- The animated creature lives here. The <img> source is swapped
+         by main.js for blink frames / jump flipbook frames. The wrapper
+         carries the CSS state animations (breathing, jump arc). -->
+    <section id="creatureArea">
+      <div id="glow"></div>                       <!-- soft spotlight behind creature -->
+      <div id="creatureWrap">
+        <img id="creatureImg" alt="creature" draggable="false" />
+        <div id="shadow"></div>                   <!-- contact shadow for grounding -->
+      </div>
+
+      <!-- Praise word + energy burst, shown on rescue -->
+      <div id="praiseLayer" aria-hidden="true">
+        <div id="burst"></div>
+        <div id="praiseText"></div>
+      </div>
+    </section>
+
+    <!-- Navigation: left opens the FAIL endcard, right opens the WIN endcard. -->
+    <nav id="arrows">
+      <button id="arrowLeft" class="nav-label nav-fail" aria-label="Show fail screen">FAIL</button>
+      <button id="arrowRight" class="nav-label nav-win" aria-label="Show win screen">WIN</button>
+    </nav>
+
+    <!-- Main action button. Toggles sad <-> happy. -->
+    <footer id="controls">
+      <button id="freeBtn">Free!</button>
+    </footer>
+  </main>
+
+  <!-- ===========================================================
+       WIN ENDCARD — second "page", reached via the right arrow.
+       A self-contained victory popup (Royal Match / Toon Blast feel):
+       darkened blurred gameplay behind, premium card, NICE! headline,
+       the rescued dragon, and the install CTA. All animated with CSS.
+       =========================================================== -->
+  <div id="winPage" aria-hidden="true">
+    <!-- dark, blurred backdrop over the paused gameplay (creature stage) -->
+    <div id="winBackdrop"></div>
+
+    <!-- the popup card -->
+    <div id="winCard">
+      <!-- rotating light, clipped inside the card (card has overflow:hidden) -->
+      <div id="winRays"></div>
+      <!-- big soft glow blobs behind the dragon (populated by main.js) -->
+      <div id="winGlowParticles" aria-hidden="true"></div>
+      <!-- stars + sparkles emitting behind the dragon (populated by main.js) -->
+      <div id="winParticles" aria-hidden="true"></div>
+
+      <div id="winStage">
+        <div id="winGlow"></div>   <!-- strong core glow behind the dragon -->
+        <img id="winDragon" src="assets/dragon/dragon_happy.png" alt="rescued dragon" draggable="false" />
+      </div>
+
+      <!-- CTA with a golden frame around it (like the reference) -->
+      <div id="ctaWrap">
+        <button id="ctaBtn" type="button">RESCUE MORE FRIENDS!</button>
+      </div>
+    </div>
+
+    <!-- back to the creature view -->
+    <button id="winBack" class="arrow" aria-label="Back to creature">&#10094;</button>
+  </div>
+
+  <!-- ===========================================================
+       FAIL ENDCARD — reached via the left "FAIL" button.
+       A gentle defeat popup: "ALMOST!", the sad dragon waiting for
+       help, and a "SAVE THE DRAGON" CTA. Empathetic, not punishing.
+       =========================================================== -->
+  <div id="failPage" aria-hidden="true">
+    <!-- dark, blurred, slightly-blue gameplay behind -->
+    <div id="failBackdrop"></div>
+
+    <div id="failCard">
+      <!-- soft clouds near the base of the night sky -->
+      <div id="failClouds" aria-hidden="true">
+        <span class="fail-cloud c1"></span>
+        <span class="fail-cloud c2"></span>
+        <span class="fail-cloud c3"></span>
+      </div>
+      <!-- soft night-sky stars (populated by main.js) -->
+      <div id="failStars" aria-hidden="true"></div>
+
+      <img id="failHeadline" src="assets/ui/almost.png" alt="ALMOST!" draggable="false" />
+
+      <div id="failStage">
+        <div id="failGlow"></div>   <!-- soft glow behind the sad dragon -->
+        <img id="failDragon" src="assets/dragon/dragon_sad.png" alt="sad dragon" draggable="false" />
+        <!-- thought balloon with a broken heart, near the dragon's head -->
+        <div id="failThought">
+          <span id="failHeart">&#128148;</span>
+          <span class="tdot tdot1"></span>
+          <span class="tdot tdot2"></span>
+        </div>
+      </div>
+
+      <p id="failSubtext">Your friend still needs your help!</p>
+
+      <div id="failCtaWrap">
+        <button id="failCtaBtn" type="button">SAVE THE DRAGON</button>
+      </div>
+    </div>
+
+    <!-- back to the creature view -->
+    <button id="failBack" class="arrow" aria-label="Back to creature">&#10094;</button>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
