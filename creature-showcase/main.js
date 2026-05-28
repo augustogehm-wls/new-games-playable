@@ -152,8 +152,24 @@ const sfxPool = {};
 function makeAudio(src, vol) { const a = new Audio(src); a.preload = "auto"; a.volume = vol; return a; }
 Object.keys(SFX_FILES).forEach((k) => { sfxPool[k] = makeAudio(SFX_FILES[k], SFX_VOL[k] || 0.6); });
 
-const bgm = makeAudio("assets/audio/bgm.mp3", 0.22);
+const BGM_VOL = 0.22;
+const bgm = makeAudio("assets/audio/bgm.mp3", BGM_VOL);
 bgm.loop = true;
+
+// Fade the bgm volume to `target` over `ms`. Used to duck the music when the
+// fail stinger plays (so they don't overlap) and to bring it back on return.
+function fadeBgm(target, ms) {
+  if (fadeBgm._t) { clearInterval(fadeBgm._t); fadeBgm._t = null; }
+  const start = bgm.volume;
+  const steps = Math.max(1, Math.round(ms / 30));
+  let i = 0;
+  fadeBgm._t = setInterval(() => {
+    i++;
+    const k = Math.min(1, i / steps);
+    bgm.volume = Math.max(0, Math.min(1, start + (target - start) * k));
+    if (k >= 1) { clearInterval(fadeBgm._t); fadeBgm._t = null; }
+  }, 30);
+}
 
 let audioUnlocked = false;
 function unlockAudio() {
@@ -673,10 +689,15 @@ els.settingsPage.querySelectorAll(".switch").forEach((sw) => {
     sw.classList.toggle("is-on", settings[key]);
     haptic("light");
     sfx("toggle_switch");
-    // music toggle: pause/resume the bgm immediately
+    // music toggle: pause/resume the bgm immediately (restore vol in case it
+    // was ducked by the fail-stinger fade)
     if (key === "music") {
-      if (settings.music && audioUnlocked) bgm.play().catch(() => {});
-      else bgm.pause();
+      if (settings.music && audioUnlocked) {
+        bgm.volume = BGM_VOL;
+        bgm.play().catch(() => {});
+      } else {
+        bgm.pause();
+      }
     }
   });
 });
@@ -791,7 +812,8 @@ function spawnWinParticles() {
 // FAIL ENDCARD — gentle defeat popup (sad dragon waiting for help).
 // ======================================================================
 function showFail() {
-  // melancholic harp sting timed with the popup slide-in
+  // duck the bgm so it doesn't overlap the stinger, then play the sad harp sting
+  fadeBgm(0, 500);
   sfx("fail_stinger");
   spawnFailStars();
   startFailBlink();
@@ -806,6 +828,8 @@ function hideFail() {
   if (failBlinkTimer) { clearTimeout(failBlinkTimer); failBlinkTimer = null; }
   els.failPage.classList.remove("show");
   els.failPage.setAttribute("aria-hidden", "true");
+  // bring the bgm back when leaving the fail endcard
+  if (settings.music && audioUnlocked) fadeBgm(BGM_VOL, 800);
 }
 
 // sad dragon blink: occasionally flash the closed-eye frame (reuses the
