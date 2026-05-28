@@ -124,13 +124,61 @@ function haptic(kind) {
   try { navigator.vibrate(patterns[kind] || 10); } catch (e) { /* ignore */ }
 }
 
-// SFX hook — placeholder. The engineer wires real audio here (gated to play
-// only after the first user tap, per ad-network rules). Names match the plan.
+// ---- Audio system ----------------------------------------------------
+// AppLovin rule: NOTHING plays before the first user gesture. We wait for the
+// very first tap on the page; once unlocked, the background music starts (if
+// the Music toggle is on) and sfx() actually plays the named clip.
+const SFX_FILES = {
+  button_click:    "assets/audio/click.mp3",
+  soft_pop:        "assets/audio/pop.mp3",
+  soft_bonk:       "assets/audio/bonk.mp3",
+  magical_sparkle: "assets/audio/sparkle.mp3",
+  solve_success:   "assets/audio/solve.mp3",
+  heart_break:     "assets/audio/heart_break.mp3",
+  popup_open:      "assets/audio/popup.mp3",
+  toggle_switch:   "assets/audio/toggle.mp3",
+  dragon_happy:    "assets/audio/win_stinger.mp3",
+  fail_stinger:    "assets/audio/fail_stinger.mp3",   // FAIL endcard sting (sad harp)
+  // dragon_sad — intentionally silent (the fail stinger covers the moment)
+  piece_slide:     "assets/audio/pop.mp3",
+};
+const SFX_VOL = {
+  button_click: 0.55, soft_pop: 0.5, soft_bonk: 0.6,
+  magical_sparkle: 0.55, solve_success: 0.7, heart_break: 0.65,
+  popup_open: 0.55, toggle_switch: 0.6, dragon_happy: 0.7,
+  fail_stinger: 0.7, piece_slide: 0.45,
+};
+const sfxPool = {};
+function makeAudio(src, vol) { const a = new Audio(src); a.preload = "auto"; a.volume = vol; return a; }
+Object.keys(SFX_FILES).forEach((k) => { sfxPool[k] = makeAudio(SFX_FILES[k], SFX_VOL[k] || 0.6); });
+
+const bgm = makeAudio("assets/audio/bgm.mp3", 0.22);
+bgm.loop = true;
+
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  if (settings.music) bgm.play().catch(() => {});
+  document.removeEventListener("pointerdown", unlockAudio, true);
+  document.removeEventListener("touchend", unlockAudio, true);
+  document.removeEventListener("click", unlockAudio, true);
+}
+// Gate all audio behind the first user gesture (capture phase so it fires before button handlers).
+document.addEventListener("pointerdown", unlockAudio, true);
+document.addEventListener("touchend", unlockAudio, true);
+document.addEventListener("click", unlockAudio, true);
+
 function sfx(name) {
-  if (!settings.sfx) return;
-  // SFX[name]: button_click | soft_pop | magical_sparkle | solve_success |
-  //            heart_break | popup_open | dragon_happy | dragon_sad | toggle_switch
-  // e.g. audioMap[name] && audioMap[name].play();
+  if (!audioUnlocked || !settings.sfx) return;
+  const base = sfxPool[name];
+  if (!base) return;                       // silent for unmapped names (e.g. dragon_sad)
+  try {
+    // clone so overlapping plays don't cut each other off
+    const a = base.cloneNode(true);
+    a.volume = base.volume;
+    a.play().catch(() => {});
+  } catch (e) { /* ignore */ }
 }
 
 // Press bounce (scale 1 -> 0.92 -> 1) for any chip/button + a light tap haptic.
@@ -388,8 +436,8 @@ function wrongMove() {
 }
 
 // ---- Hearts / lives --------------------------------------------------
-// Heart art is the glossy red heart taken from the HomeScreen reference.
-const HEART_SVG = '<img src="assets/ui/heart.png" alt="" draggable="false">';
+// Heart art is the Paradise Paws glossy heart (red core + gold border).
+const HEART_SVG = '<img src="assets/ui/paws_heart.png" alt="" draggable="false">';
 
 function renderHearts() {
   els.hearts.innerHTML = "";
@@ -625,6 +673,11 @@ els.settingsPage.querySelectorAll(".switch").forEach((sw) => {
     sw.classList.toggle("is-on", settings[key]);
     haptic("light");
     sfx("toggle_switch");
+    // music toggle: pause/resume the bgm immediately
+    if (key === "music") {
+      if (settings.music && audioUnlocked) bgm.play().catch(() => {});
+      else bgm.pause();
+    }
   });
 });
 
@@ -738,8 +791,8 @@ function spawnWinParticles() {
 // FAIL ENDCARD — gentle defeat popup (sad dragon waiting for help).
 // ======================================================================
 function showFail() {
-  // SFX: a soft, non-aggressive "bonk" the moment the player fails,
-  //      then a gentle "whoosh" as the popup slides in.
+  // melancholic harp sting timed with the popup slide-in
+  sfx("fail_stinger");
   spawnFailStars();
   startFailBlink();
   // toggling display restarts the staged entrance every time
@@ -747,9 +800,6 @@ function showFail() {
   void els.failPage.offsetWidth; // force reflow
   els.failPage.classList.add("show");
   els.failPage.setAttribute("aria-hidden", "false");
-  // SFX: a light descending "bloop" timed with the ALMOST! headline (~0.3s in).
-  // SFX: the broken heart's wobble loops in CSS — play a subtle "tink" with it,
-  //      but throttle it (e.g. every other wobble) so it never gets annoying.
 }
 
 function hideFail() {

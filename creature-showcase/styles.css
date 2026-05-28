@@ -16,10 +16,15 @@
   --navy: #2b2150;            /* deep navy (shared with praise stroke) */
   --navy-soft: #4a3f7a;       /* lighter navy for outlines/inactive */
   --hint-glow: #ffd34d;       /* gold glow on the hinted arrow */
-  /* HUD chrome */
-  --chip-bg: #ffffff;         /* white circle buttons / pills */
-  --chip-ink: #2b2150;        /* navy icon/text inside chips */
-  --chip-edge: #d9d4f0;       /* soft lilac chip shadow */
+  /* HUD chrome — v3 Paradise Paws gold palette */
+  --chip-bg: #ffffff;         /* white card (level pill, instruction) */
+  --chip-ink: #2b2150;        /* navy ink for back/retry glyphs */
+  --chip-edge: #d9d4f0;       /* soft lilac shadow on white cards */
+  /* gold chips matching the PP heart/settings */
+  --gold-a: #ffe17a;          /* gold top highlight */
+  --gold-b: #ffc23c;           /* gold mid */
+  --gold-c: #e89015;           /* gold bottom shade */
+  --gold-edge: #b86a0d;        /* deep amber drop edge */
   --heart-full: #ff4d5e;      /* live heart */
   --heart-empty: #c9c4e0;     /* lost heart */
   --praise-fill: #ffffff;
@@ -120,44 +125,60 @@ body {
 .hud-center { display: flex; gap: clamp(6px, 1.8vw, 10px); align-items: center; }
 
 /* circular soft-plastic chip buttons (back / retry / settings) */
+/* gold chip — matches the Paradise Paws heart/settings palette */
 .icon-btn {
   position: relative;
   width: clamp(44px, 6.6vh, 56px);
   height: clamp(44px, 6.6vh, 56px);
   border-radius: 50%;
   border: none;
-  background: linear-gradient(165deg, #ffffff 0%, #f3effc 55%, #e7e0f7 100%);
+  background: linear-gradient(165deg, var(--gold-a) 0%, var(--gold-b) 55%, var(--gold-c) 100%);
   color: var(--chip-ink);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  /* layered depth: inner highlight + inner bottom shade + drop edge + ambient + rim */
   box-shadow:
-    inset 0 2px 2px rgba(255, 255, 255, 0.95),
-    inset 0 -4px 5px rgba(120, 100, 180, 0.18),
-    0 5px 0 var(--chip-edge),
-    0 9px 16px rgba(70, 55, 130, 0.22),
-    0 0 0 1px rgba(255, 255, 255, 0.45);
+    inset 0 2px 2px rgba(255, 255, 255, 0.8),
+    inset 0 -4px 5px rgba(120, 60, 0, 0.32),
+    0 5px 0 var(--gold-edge),
+    0 9px 16px rgba(160, 90, 10, 0.32),
+    0 0 0 1px rgba(255, 220, 140, 0.5);
   transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
 }
-/* glossy top highlight */
+/* glossy top highlight on the gold chip */
 .icon-btn::before {
   content: "";
   position: absolute; left: 18%; top: 9%; width: 64%; height: 42%;
   border-radius: 50%;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0));
   pointer-events: none;
 }
 .icon-btn img { position: relative; width: 52%; height: auto; display: block; pointer-events: none; }
 .icon-btn:active {
   transform: scale(0.9) translateY(2px);
   box-shadow:
-    inset 0 2px 2px rgba(255, 255, 255, 0.85),
-    inset 0 -2px 3px rgba(120, 100, 180, 0.2),
-    0 2px 0 var(--chip-edge),
-    0 4px 8px rgba(70, 55, 130, 0.2);
+    inset 0 2px 2px rgba(255, 255, 255, 0.75),
+    inset 0 -2px 3px rgba(120, 60, 0, 0.32),
+    0 2px 0 var(--gold-edge),
+    0 4px 8px rgba(160, 90, 10, 0.3);
 }
+
+/* asset-btn — the whole button IS a Paradise Paws image (chip baked into the art) */
+.asset-btn {
+  position: relative;
+  width: clamp(44px, 6.6vh, 56px);
+  height: clamp(44px, 6.6vh, 56px);
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 5px 6px rgba(120, 70, 0, 0.28));
+}
+.asset-btn img { width: 100%; height: 100%; display: block; pointer-events: none; }
+.asset-btn:active { transform: scale(0.9) translateY(2px); filter: drop-shadow(0 2px 3px rgba(120, 70, 0, 0.32)); }
+.asset-btn.tapped { animation: chipBounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1); }
 /* press bounce with soft overshoot, driven by .tapped class from main.js */
 .icon-btn.tapped { animation: chipBounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1); }
 @keyframes chipBounce {
@@ -168,8 +189,9 @@ body {
 
 /* hearts — glossy, gently floating, satisfying break */
 .heart {
-  width: clamp(28px, 4.3vh, 36px);
-  height: clamp(28px, 4.3vh, 36px);
+  /* slightly bigger to keep the inner red heart legible (gold border eats area) */
+  width: clamp(34px, 5.2vh, 44px);
+  height: clamp(34px, 5.2vh, 44px);
   position: relative;
   color: var(--heart-full);
   transition: color 0.15s ease;
