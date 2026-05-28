@@ -65,15 +65,31 @@ const TUNING = {
 
 // ---- DOM handles -----------------------------------------------------
 const els = {
-  name: document.getElementById("creatureName"),
+  stage: document.getElementById("stage"),
   wrap: document.getElementById("creatureWrap"),
   img: document.getElementById("creatureImg"),
   shadow: document.getElementById("shadow"),
-  freeBtn: document.getElementById("freeBtn"),
-  arrowL: document.getElementById("arrowLeft"),
-  arrowR: document.getElementById("arrowRight"),
   praiseText: document.getElementById("praiseText"),
   burst: document.getElementById("burst"),
+  // gameplay HUD + puzzle
+  puzzleArea: document.getElementById("puzzleArea"),
+  maze: document.getElementById("maze"),
+  fx: document.getElementById("fx"),
+  bgFx: document.getElementById("bgFx"),
+  bars: document.getElementById("bars"),
+  tutorHand: document.getElementById("tutorHand"),
+  hearts: document.getElementById("hearts"),
+  levelNum: document.getElementById("levelNum"),
+  backBtn: document.getElementById("backBtn"),
+  retryBtn: document.getElementById("retryBtn"),
+  settingsBtn: document.getElementById("settingsBtn"),
+  hintBtn: document.getElementById("hintBtn"),
+  solveBtn: document.getElementById("solveBtn"),
+  wrongBtn: document.getElementById("wrongBtn"),
+  // settings popup
+  settingsPage: document.getElementById("settingsPage"),
+  settingsBackdrop: document.getElementById("settingsBackdrop"),
+  settingsClose: document.getElementById("settingsClose"),
   // win endcard
   winPage: document.getElementById("winPage"),
   winCard: document.getElementById("winCard"),
@@ -88,6 +104,45 @@ const els = {
   failBack: document.getElementById("failBack"),
   failCtaBtn: document.getElementById("failCtaBtn"),
 };
+
+// ---- Gameplay config + state ----------------------------------------
+const LEVEL = 23;                 // cosmetic level label
+const START_LIVES = 3;
+let lives = START_LIVES;
+let solved = false;               // true once the dragon is freed
+let inputLocked = false;          // ignore taps during animations / popup
+let wrongCooldown = false;        // brief lock after a wrong-move tap (anti-spam)
+
+// Player options (toggled in the settings popup; persist in memory).
+const settings = { music: true, sfx: true, haptics: true };
+
+// Haptic feedback — respects the Haptics toggle + device support.
+// light: taps/arrows/toggles · medium: solve/heart-loss/popup · success: rescue.
+function haptic(kind) {
+  if (!settings.haptics || !navigator.vibrate) return;
+  const patterns = { light: 10, medium: 25, success: [15, 40, 15] };
+  try { navigator.vibrate(patterns[kind] || 10); } catch (e) { /* ignore */ }
+}
+
+// SFX hook — placeholder. The engineer wires real audio here (gated to play
+// only after the first user tap, per ad-network rules). Names match the plan.
+function sfx(name) {
+  if (!settings.sfx) return;
+  // SFX[name]: button_click | soft_pop | magical_sparkle | solve_success |
+  //            heart_break | popup_open | dragon_happy | dragon_sad | toggle_switch
+  // e.g. audioMap[name] && audioMap[name].play();
+}
+
+// Press bounce (scale 1 -> 0.92 -> 1) for any chip/button + a light tap haptic.
+function pressFeedback(btn) {
+  if (!btn) return;
+  btn.classList.remove("tapped");
+  void btn.offsetWidth;           // restart the animation
+  btn.classList.add("tapped");
+  btn.addEventListener("animationend", () => btn.classList.remove("tapped"), { once: true });
+  haptic("light");
+  sfx("button_click");
+}
 
 // Win-endcard tunables (live-adjustable via the debug panel, Ctrl+Shift+H)
 const WIN_TUNING = {
@@ -151,8 +206,6 @@ function showSad(c) {
   state = "sad";
   els.img.style.transformOrigin = "50% 100%";
   els.img.src = c.base + c.sad.base;
-  els.freeBtn.textContent = "Free!";
-  els.freeBtn.classList.remove("is-happy");
   startSadIdle();
   startBlinkLoop(c);
 }
@@ -212,8 +265,6 @@ function startBlinkLoop(c) {
 function showHappy(c) {
   state = "happy";
   els.img.style.transformOrigin = "50% 100%";
-  els.freeBtn.textContent = "Again";
-  els.freeBtn.classList.add("is-happy");
   startJump(c);
   playPraise();
 }
@@ -286,32 +337,297 @@ function playPraise() {
   praiseFadeTimer = setTimeout(() => els.praiseText.classList.add("fadeout"), landMs + 650);
 }
 
-// ---- Creature switching ----------------------------------------------
+// ---- Creature loading ------------------------------------------------
 function loadCreature(idx) {
   stopLoops();
   current = idx;
   const c = CREATURES[current];
   preloadCreature(c);
-  els.name.textContent = c.name;
   showSad(c);
-  updateArrows();
 }
 
-function updateArrows() {
-  // FAIL (left) and WIN (right) are always reachable from the creature view.
+// ======================================================================
+// GAMEPLAY (TEMPORARY) — the arrow puzzle was removed. The PM will drop in an
+// arrows PNG overlay later; for now #maze is an empty overlay layer over the
+// caged dragon. SOLVE frees the dragon (win); a red WRONG MOVE test button
+// costs a heart (3 wrong -> fail). Win/lose are NOT bound to any arrow.
+// ======================================================================
+
+// #maze is kept as an empty overlay slot, ready for the future arrows PNG.
+function buildPuzzle() {
+  els.maze.innerHTML = "";
 }
 
-// ---- Input -----------------------------------------------------------
-function toggleState() {
-  const c = CREATURES[current];
+// Free the dragon: the cage reacts + slides open, glow grows, the dragon jumps
+// for joy, then the WIN endcard appears. Triggered by the SOLVE button.
+function freeDragon() {
+  if (solved) return;
+  solved = true;
+  inputLocked = true;
+  clearHint();
+  els.solveBtn.disabled = true;
+  els.bars.classList.add("open");
+  spawnMagicBurst();
+  els.puzzleArea.classList.add("freed");
+  setTimeout(() => {
+    stopLoops();
+    showHappy(CREATURES[current]);
+    haptic("success");
+    sfx("dragon_happy");
+  }, 360);
+  setTimeout(() => goToPage("win"), 1700);
+}
+
+// Red WRONG MOVE test button — costs one heart per tap (3 -> FAIL endcard).
+function wrongMove() {
+  if (solved || inputLocked || wrongCooldown) return;
+  wrongCooldown = true;
+  setTimeout(() => (wrongCooldown = false), 650);  // let the break animation play
+  pressFeedback(els.wrongBtn);
+  loseHeart();                                      // break + screen shake (0 -> FAIL)
+}
+
+// ---- Hearts / lives --------------------------------------------------
+// Heart art is the glossy red heart taken from the HomeScreen reference.
+const HEART_SVG = '<img src="assets/ui/heart.png" alt="" draggable="false">';
+
+function renderHearts() {
+  els.hearts.innerHTML = "";
+  for (let i = 0; i < START_LIVES; i++) {
+    const h = document.createElement("div");
+    h.className = "heart" + (i < lives ? "" : " empty");
+    h.innerHTML = '<div class="heart-core">' + HEART_SVG + "</div>";
+    // stagger the idle float so the hearts breathe in a gentle wave
+    h.querySelector(".heart-core").style.animationDelay = (i * 0.4).toFixed(2) + "s";
+    els.hearts.appendChild(h);
+  }
+}
+
+// Lose one life with a quick, satisfying break: shake -> flash red -> crack/
+// shatter -> shard burst -> shockwave -> micro screen shake. 0 lives -> FAIL.
+function loseHeart() {
+  if (inputLocked || solved || lives <= 0) return;
+  lives--;
+  sfx("heart_break");
+  haptic("medium");
+
+  const heartEls = els.hearts.querySelectorAll(".heart");
+  const h = heartEls[lives]; // the heart that just emptied (rightmost full one)
+  if (h) {
+    const core = h.querySelector(".heart-core");
+    h.classList.add("breaking", "flash");
+    setTimeout(() => h.classList.remove("flash"), 140);
+    // shatter the core + soft red glow pulse + shards + a shockwave ring
+    setTimeout(() => {
+      if (core) core.classList.add("shatter");
+      const rg = document.createElement("div");
+      rg.className = "redglow";
+      h.appendChild(rg);
+      rg.addEventListener("animationend", () => rg.remove(), { once: true });
+      spawnHeartShards(h);
+      const shock = document.createElement("div");
+      shock.className = "shock";
+      h.appendChild(shock);
+      shock.addEventListener("animationend", () => shock.remove(), { once: true });
+    }, 150);
+    // settle into the empty state
+    setTimeout(() => {
+      h.classList.remove("breaking");
+      h.classList.add("empty");
+      if (core) {
+        core.classList.remove("shatter");
+        core.style.transform = "";
+        core.style.opacity = "";
+      }
+    }, 520);
+  }
+
+  // micro screen shake
+  els.stage.classList.remove("shake");
+  void els.stage.offsetWidth;
+  els.stage.classList.add("shake");
+  els.stage.addEventListener("animationend", () => els.stage.classList.remove("shake"), { once: true });
+
+  if (lives <= 0) {
+    inputLocked = true;
+    setTimeout(() => goToPage("fail"), 650);
+  }
+}
+
+function spawnHeartShards(heart) {
+  const N = 9;
+  for (let i = 0; i < N; i++) {
+    const s = document.createElement("div");
+    s.className = "shard";
+    const ang = (Math.PI * 2 * i) / N + Math.random() * 0.5;
+    const dist = 16 + Math.random() * 16;
+    s.style.setProperty("--sx", Math.cos(ang) * dist + "px");
+    s.style.setProperty("--sy", Math.sin(ang) * dist + "px");
+    s.style.setProperty("--sr", Math.random() * 240 - 120 + "deg");
+    heart.appendChild(s);
+    s.addEventListener("animationend", () => s.remove(), { once: true });
+  }
+}
+
+// ---- Hint ------------------------------------------------------------
+// The arrow gameplay is gone for now, so the hint has no piece to point at yet.
+// Keep the button responsive; it'll point at the arrows PNG once that's added.
+function showHint() {
+  if (inputLocked || solved) return;
+  pressFeedback(els.hintBtn);
+  sfx("magical_sparkle");
+}
+
+function clearHint() {
+  els.tutorHand.classList.remove("show");
+}
+
+// Place the tutorial hand over a target element (so its fingertip points at it).
+// Coordinates are relative to the puzzle area (the hand's offset parent).
+function positionHandOver(target) {
+  const pa = els.puzzleArea.getBoundingClientRect();
+  const ar = target.getBoundingClientRect();
+  const cx = ar.left + ar.width / 2 - pa.left;
+  const cy = ar.top + ar.height / 2 - pa.top;
+  els.tutorHand.style.left = cx + "px";
+  els.tutorHand.style.top = cy + "px";
+}
+
+// ---- Solve = free the dragon (win) -----------------------------------
+function solve() {
+  if (inputLocked || solved) return;
+  haptic("medium");
+  sfx("solve_success");
+  freeDragon();
+}
+
+const MAGIC_COLORS = ["#9ad0ff", "#fff3a8", "#ffffff", "#bfa8ff", "#8fe6ff"];
+
+// Emit a small magical sparkle burst at a point (px, relative to the puzzle area).
+function emitMagic(cx, cy, count, spreadPct) {
+  const pa = els.puzzleArea.getBoundingClientRect();
+  const base = Math.min(pa.width, pa.height) * spreadPct;
+  for (let i = 0; i < count; i++) {
+    const m = document.createElement("div");
+    m.className = "magic";
+    m.style.left = cx + "px";
+    m.style.top = cy + "px";
+    const ang = Math.random() * Math.PI * 2;
+    const dist = base * (0.45 + Math.random() * 0.8);
+    m.style.setProperty("--mx", Math.cos(ang) * dist + "px");
+    m.style.setProperty("--my", Math.sin(ang) * dist + "px");
+    m.style.setProperty("--mz", 7 + Math.random() * 13 + "px");
+    m.style.setProperty("--mc", MAGIC_COLORS[i % MAGIC_COLORS.length]);
+    m.style.setProperty("--mdur", 0.6 + Math.random() * 0.5 + "s");
+    els.fx.appendChild(m);
+    m.addEventListener("animationend", () => m.remove(), { once: true });
+  }
+}
+
+// Magical sparkle burst centred on the cage, used when the bars dissolve.
+function spawnMagicBurst() {
+  const rect = els.bars.getBoundingClientRect();
+  const pa = els.puzzleArea.getBoundingClientRect();
+  emitMagic(rect.left + rect.width / 2 - pa.left, rect.top + rect.height / 2 - pa.top, 22, 0.42);
+  sfx("magical_sparkle");
+}
+
+// ---- Ambient FX (premium feel, spawned once) -------------------------
+// Foreground twinkling sparkles in #fx + slow-drifting background dust in #bgFx.
+function spawnAmbientSparkles() {
+  if (els.fx.querySelectorAll(".spark").length) return; // only once
+  for (let i = 0; i < 12; i++) {
+    const s = document.createElement("div");
+    s.className = "spark";
+    const sz = 5 + Math.random() * 9;
+    s.style.width = s.style.height = sz + "px";
+    s.style.left = Math.random() * 96 + 2 + "%";
+    s.style.top = Math.random() * 92 + 4 + "%";
+    s.style.setProperty("--sdur", 2.4 + Math.random() * 2.6 + "s");
+    s.style.setProperty("--sdelay", Math.random() * 3 + "s");
+    els.fx.appendChild(s);
+  }
+  // subtle drifting magical dust behind the scene
+  if (els.bgFx && !els.bgFx.querySelector(".dust")) {
+    for (let i = 0; i < 7; i++) {
+      const d = document.createElement("div");
+      d.className = "dust";
+      const sz = 14 + Math.random() * 24;
+      d.style.width = d.style.height = sz + "px";
+      d.style.left = Math.random() * 88 + 6 + "%";
+      d.style.top = Math.random() * 78 + 12 + "%";
+      d.style.setProperty("--ddur", 8 + Math.random() * 7 + "s");
+      d.style.setProperty("--ddelay", Math.random() * 8 + "s");
+      d.style.setProperty("--dx", Math.random() * 30 - 15 + "px");
+      d.style.setProperty("--dy", -30 - Math.random() * 45 + "px");
+      d.style.setProperty("--dop", (0.26 + Math.random() * 0.24).toFixed(2));
+      els.bgFx.appendChild(d);
+    }
+  }
+}
+
+// ---- Retry / reset ---------------------------------------------------
+function resetPuzzle() {
+  // visual reset: bars back, dragon sad, lives restored
+  solved = false;
+  inputLocked = false;
+  lives = START_LIVES;
+  wrongCooldown = false;
+  sfx("soft_pop");
+
+  clearHint();
+  els.solveBtn.disabled = false;
+  els.bars.classList.remove("open");
+  els.puzzleArea.classList.remove("freed");
+  // clear any leftover magic particles
+  els.fx.querySelectorAll(".magic").forEach((m) => m.remove());
+
+  buildPuzzle();        // rebuild all pieces from scratch
+  renderHearts();
   stopLoops();
-  if (state === "sad") showHappy(c);
-  else showSad(c);
+  showSad(CREATURES[current]);
 }
 
-els.freeBtn.addEventListener("click", toggleState);
-els.arrowL.addEventListener("click", () => goToPage("fail"));
-els.arrowR.addEventListener("click", () => goToPage("win"));
+// ---- Settings popup --------------------------------------------------
+function openSettings() {
+  haptic("medium");
+  sfx("popup_open");
+  els.settingsPage.classList.add("show");
+  els.settingsPage.setAttribute("aria-hidden", "false");
+}
+function closeSettings() {
+  els.settingsPage.classList.remove("show");
+  els.settingsPage.setAttribute("aria-hidden", "true");
+}
+
+// ---- Input wiring ----------------------------------------------------
+els.solveBtn.addEventListener("click", () => { pressFeedback(els.solveBtn); solve(); });
+if (els.wrongBtn) els.wrongBtn.addEventListener("click", wrongMove);
+els.hintBtn.addEventListener("click", showHint);
+
+els.retryBtn.addEventListener("click", () => {
+  pressFeedback(els.retryBtn);
+  els.retryBtn.classList.remove("spin");
+  void els.retryBtn.offsetWidth;
+  els.retryBtn.classList.add("spin");
+  resetPuzzle();
+});
+// Back is a soft reset in this standalone playable (no real navigation).
+els.backBtn.addEventListener("click", () => { pressFeedback(els.backBtn); resetPuzzle(); });
+els.settingsBtn.addEventListener("click", () => { pressFeedback(els.settingsBtn); openSettings(); });
+
+els.settingsClose.addEventListener("click", () => { pressFeedback(els.settingsClose); closeSettings(); });
+els.settingsBackdrop.addEventListener("click", closeSettings);
+els.settingsPage.querySelectorAll(".switch").forEach((sw) => {
+  sw.addEventListener("click", () => {
+    const key = sw.dataset.key;
+    settings[key] = !settings[key];
+    sw.classList.toggle("is-on", settings[key]);
+    haptic("light");
+    sfx("toggle_switch");
+  });
+});
+
 els.winBack.addEventListener("click", () => goToPage("creature"));
 els.failBack.addEventListener("click", () => goToPage("creature"));
 els.ctaBtn.addEventListener("click", onInstallClick);
@@ -326,7 +642,7 @@ function goToPage(name) {
   hideFail();
   if (name === "win") { stopLoops(); showWin(); }      // freeze gameplay, show win
   else if (name === "fail") { stopLoops(); showFail(); } // freeze gameplay, show fail
-  else { showSad(CREATURES[current]); }                 // back to the creature view
+  else { resetPuzzle(); }                               // back to a fresh LOCKED puzzle
 }
 
 function showWin() {
@@ -601,4 +917,8 @@ function showToast(msg) {
 })();
 
 // ---- Boot ------------------------------------------------------------
-loadCreature(0);
+if (els.levelNum) els.levelNum.textContent = LEVEL;
+buildPuzzle();
+renderHearts();
+spawnAmbientSparkles();
+loadCreature(0);   // dragon starts SAD, trapped behind the cage (LOCKED state)

@@ -1,21 +1,55 @@
-# Creature Showcase
+# Creature Showcase — v2 (fake playable)
 
-A small, self-contained HTML page that shows one rescue-creature in two
-looping states — **sad (caged)** and **happy (rescued)** — and lets you toggle
-between them with a button. It exists as a **visual handoff document**: a way
-for the art side to validate how each creature reads and animates, and for the
-gameplay engineer to see exactly which asset files to use and how.
+A small, self-contained HTML mini-experience that **looks and feels like the real
+casual-puzzle "rescue" gameplay** without shipping any real puzzle logic. A kawaii
+blue dragon sits trapped behind a cage in the middle of an arrow maze; the player
+taps **SOLVE!** (or follows the hint), the cage slides open with a magical burst,
+the dragon jumps for joy, and a **WIN** endcard pushes the install. Tapping the
+wrong arrow costs a life; running out of lives shows the **FAIL** endcard.
 
-> There are **no cage bars** anywhere. Bars are the gameplay team's
-> responsibility — this showcase only ever shows the isolated creature.
+It is intentionally a **scripted fake** — there is no pathfinding and no real
+solution. It exists to validate the gameplay *feel*, the UX chrome, and the
+character presentation before the real game logic is wired in.
+
+> **v1 is preserved** under `backup/v1_current_showcase/` (the older "menu
+> showcase" that only toggled sad ↔ happy). Restore it by copying those files
+> back over the project root.
 
 ---
 
 ## Run it
 
-Just open **`index.html`** in any browser (double-click works — no server, no
-build step). It uses plain `<img>` tags and a classic script, so it runs fine
-from `file://`.
+Open **`index.html`** in any browser (double-click works — no server, no build
+step). Plain `<img>` tags + a classic script, so it runs fine from `file://`.
+
+---
+
+## The fake puzzle flow
+
+It's an **unblock puzzle** (Bus Jam / Parking Jam style): independent arrow
+pieces congest around the cage and block one another; the player removes them in
+the correct order to free the dragon.
+
+1. **LOCKED (start):** the sad dragon breathes/blinks behind a rounded navy
+   **cage**, surrounded by ~13 **independent arrow pieces** (straight, short,
+   long, L-corner, curved) — these are removable game pieces, NOT connected
+   pipes. Full mobile HUD on top, instruction + **SOLVE!** at the bottom.
+2. **Hint (optional):** tapping the bulb points a **tutorial hand** at the next
+   correct piece (which already glows gold).
+3. **Correct tap:** tapping the next-in-order piece slides it out in its arrow
+   direction with a sparkle; the next piece then highlights.
+4. **Wrong tap:** tapping any other (still-blocked) piece → it shakes + red
+   flash, one **heart breaks** (shake → red flash → shatter → shards →
+   shockwave → micro screen-shake), with a short anti-spam cooldown. At
+   **0 hearts** the **FAIL** endcard appears.
+5. **Solve:** **SOLVE!** auto-plays the remaining correct pieces one-by-one
+   (~230 ms apart) — it shows the solution, it is NOT an instant win.
+6. **Release:** once the last required piece is gone, the cage shakes, the bars
+   slide/fade + magic burst, remaining decoy pieces fade, the dragon jumps for
+   joy with a praise pop, then the **WIN** endcard slides in.
+
+Everything is wired in `main.js`. The win/fail popups are the same endcards from
+v1 (`goToPage("creature" | "win" | "fail")`).
 
 ---
 
@@ -23,187 +57,139 @@ from `file://`.
 
 ```
 creature-showcase/
-├── index.html              # markup (stage, creature, arrows, button, praise)
-├── styles.css              # all visuals + the sad-state CSS animations
-├── main.js                 # state machine + creature roster (edit to add creatures)
+├── index.html              # HUD + puzzle area + bottom bar + settings popup + endcards
+├── styles.css              # all visuals + gameplay/heart/cage/hint/settings animations
+├── main.js                 # gameplay state + creature roster + endcards
 ├── README.md               # this file
+├── backup/
+│   └── v1_current_showcase/   # frozen v1 (restore point) — do not edit
 └── assets/
-    ├── creatures/
-    │   └── dragon_blue/                  # one folder per creature
-    │       ├── source.png                # <-- YOU drop the base art here
-    │       ├── creature_sad.png          # generated: transparent sad base
-    │       ├── creature_sad_blink.png    # generated: eyes-closed blink frame
-    │       ├── creature_happy.png        # generated: happy "mid" pose (one arm up)
-    │       ├── creature_happy_crouch.png # generated: crouch / anticipation pose
-    │       └── creature_happy_apex.png   # generated: arms-up celebration pose
-    └── dragon/
-        ├── dragon_happy.png              # win-endcard dragon (reuses the apex pose)
-        ├── dragon_sad.png                # fail-endcard dragon (reuses the sad base)
-        └── dragon_sad_blink.png          # fail-endcard blink frame
+    ├── creatures/dragon_blue/   # gameplay dragon sprites (sad/blink/happy poses)
+    ├── dragon/                  # endcard dragon sprites (happy/sad/blink)
+    ├── ui/                      # almost.png (FAIL headline logo)
+    ├── hands/                   # tutorial_hand.png (hint hand)
+    └── particles/               # reserved — current particles are CSS, this is for future PNGs
 ```
 
-(`source.png` plus the raw scratch files used to build the assets are removed
-from the shipped folder — only the five sprites above are needed at runtime.)
+The maze arrows, cage bars, hearts, gear, level pill, and all HUD buttons are
+**drawn in CSS/SVG** — no image files, which keeps things crisp and tiny.
 
 ---
 
-## Where to put the base image
+## How to swap the dragon
 
-Drop the creature's base art at:
+The character is data-driven by the `CREATURES` array in `main.js`. To swap or
+add a creature:
 
-```
-assets/creatures/<creature_id>/source.png
-```
+1. Create `assets/creatures/<new_id>/` and drop its `source.png` (isolated
+   creature, clean/solid background — it gets removed automatically).
+2. Generate the five transparent sprites (same hybrid pipeline as v1, see
+   *Asset pipeline* below): `creature_sad.png`, `creature_sad_blink.png`,
+   `creature_happy.png`, `creature_happy_crouch.png`, `creature_happy_apex.png`.
+   Normalize each state's sprites to a common canvas so swaps don't jitter.
+3. Edit the `CREATURES` entry in `main.js` (point `base` at the new folder).
 
-- **No bars / no cage.** Just the isolated creature.
-- A clean or solid background is ideal (it gets removed automatically).
-- A sad / neutral sitting pose is the best base — the happy poses are generated
-  from it.
+The endcards use the separate sprites in `assets/dragon/` (`dragon_happy.png`,
+`dragon_sad.png`, `dragon_sad_blink.png`) — swap those too for a new creature.
+
+The cage, maze, HUD, and animation engine are all generic and need no changes.
 
 ---
 
-## Which files get generated (and how)
+## How to configure the puzzle & hint
 
-All sprites are derived from `source.png` and kept transparent so they
-composite over any background. The pipeline is a **hybrid** designed to stay
-lightweight — generated frames only where they're needed, everything else done
-in code:
+The puzzle is data-driven in `main.js`:
+
+- **The pieces** live in the `PIECES` array. Each entry is one independent arrow:
+  `{ id, shape, w, cx, cy, rot, slide, order?, z? }` —
+  `shape` is `straight | short | long | corner | curve`,
+  `w` the width as a % of the square field, `cx/cy` the centre (% of field),
+  `rot` the orientation, `slide` the exit direction (`left/right/up/down`),
+  `order` the position in the correct removal sequence (omit it for a decoy
+  blocker), `z` an optional layer. `SEQUENCE_LEN` is derived from how many
+  pieces have an `order`.
+- **The correct order** is just the `order` numbers: only the piece whose
+  `order === currentStep` is removable; `highlightNext()` glows it. Reorder or
+  re-`order` the pieces to change the solution.
+- **Piece visuals** come from `pieceSVG(shape)` (navy body + gloss + arrow head);
+  add a shape there to introduce a new piece type.
+- **The hand:** `positionHandOver()` places `assets/hands/tutorial_hand.png`
+  over the next correct piece; `#tutorHand.show` CSS does the 1.2 s tap loop.
+- **Correct tap** → `correctTap()` (slide out + advance); **wrong tap** →
+  `wrongTap()` (shake + `loseHeart()` + cooldown); **SOLVE** auto-plays the rest.
+
+---
+
+## How to replace assets
+
+- **Dragon sprites:** drop new PNGs into `assets/creatures/<id>/` and
+  `assets/dragon/` (keep the same filenames or update the `CREATURES` entry).
+- **Tutorial hand:** replace `assets/hands/tutorial_hand.png`.
+- **FAIL headline logo:** replace `assets/ui/almost.png`.
+- **Arrows / cage / hearts / HUD icons:** these are inline SVG in `index.html`
+  (HUD icons, hearts via `HEART_SVG`, arrows via `ARROW_SVG` in `main.js`) and
+  CSS shapes — edit the markup/CSS, no files to swap.
+- **Colors:** all palette tokens live in `:root` at the top of `styles.css`
+  (`--navy`, `--heart-full`, `--bg-top/bottom`, `--btn-*`, etc.).
+
+---
+
+## Sound & haptics (placeholders)
+
+- **SFX:** `main.js` has a central `sfx(name)` hook with comments marking every
+  trigger point. The showcase ships silent; the engineer wires real audio there
+  (gated to play only after the first user tap, per ad-network rules). Names:
+  `button_click`, `soft_pop`, `magical_sparkle`, `solve_success`, `heart_break`,
+  `popup_open`, `dragon_happy`, `dragon_sad`, `toggle_switch`.
+- **Haptics:** `haptic("light" | "medium" | "success")` calls
+  `navigator.vibrate` (respects the Settings → Haptics toggle and device
+  support). Light = taps/arrows/toggles, medium = solve/heart-loss/popup,
+  success = rescue.
+- **Settings popup:** the gear opens toggles for Music / SFX / Haptics; values
+  live in the `settings` object in `main.js`.
+
+---
+
+## How to integrate the real gameplay later
+
+This build is the *shell*. To turn it into real gameplay:
+
+1. **Replace the scripted pieces** — swap the `PIECES` data + `buildPuzzle()` for
+   real level data, and replace the `order`-based check in `tapPiece()` with real
+   blocking logic (a piece is removable only when nothing physically blocks it).
+2. **Replace `solve()`** — instead of auto-playing the scripted order, drive it
+   from your real solver. Keep `onSequenceComplete()` (cage release + `showHappy()`
+   + `goToPage("win")`) as the reward when the level is actually solved.
+3. **Wire `loseHeart()`** to your real fail condition (invalid move / timer)
+   instead of the wrong-piece tap. The break animation is reusable as-is.
+4. **Wire `onInstallClick()`** to the real store link / `mraid.open(STORE_URL)`
+   (top of `main.js`). The endcards' CTAs already call it.
+5. **Plug in audio** at the `sfx()` hook and keep the haptic calls.
+
+The character rendering (sad idle, jump-for-joy, praise pop) and the endcards are
+production-usable as-is.
+
+---
+
+## Asset pipeline (how the dragon sprites were made)
+
+All sprites derive from `source.png`, kept transparent so they composite over
+any background. Hybrid pipeline — generated frames only where needed, motion in
+code:
 
 | File | What it is | How it's made |
 |------|------------|---------------|
 | `creature_sad.png` | Transparent sad base | Background removed from `source.png` (rembg, `isnet-anime`) |
-| `creature_sad_blink.png` | Same sprite, eyes gently closed | AI image **edit** of the original — closes the eyes only, so it's a perfect frame match for a seamless blink (Gemini 3 Pro Image Edit) |
-| `creature_happy.png` | Happy "mid" pose (smiling, one arm up) | AI image **edit** of the original (happy expression + raised arm), bg removed |
-| `creature_happy_crouch.png` | Crouch / anticipation pose | AI image **edit** (arms down, ready to spring), bg removed |
-| `creature_happy_apex.png` | Arms-up celebration pose | AI image **edit** (both arms up, big smile), bg removed |
+| `creature_sad_blink.png` | Eyes gently closed | AI image **edit** of the original — closes eyes only (Gemini 3 Pro Image Edit) |
+| `creature_happy.png` | Happy "mid" pose | AI image **edit** (happy + one arm up), bg removed |
+| `creature_happy_crouch.png` | Crouch / anticipation | AI image **edit** (arms down, ready to spring), bg removed |
+| `creature_happy_apex.png` | Arms-up celebration | AI image **edit** (both arms up), bg removed |
 
-**Why edits + code instead of a video:** we first tried image-to-video to get
-the jump motion, but the video model re-framed and zoomed the character (it
-cropped the legs/feet), so the frames couldn't show a real jump or match the
-sad framing. Editing full-body poses keeps the whole creature, a consistent
-frame, and perfect alignment. The motion itself (jump arc, squash/stretch,
-breathing, blink timing) is done in code, which is essentially free and loops
-perfectly. All sprites in a state are normalized to the same canvas so swaps
-never jitter.
+**Why edits + code, not video:** image-to-video re-framed/zoomed the character
+(cropped legs/feet), breaking the jump and the framing match. Editing full-body
+poses keeps the whole creature and a consistent frame; the motion (jump arc,
+squash/stretch, breathing, blink) is done in code — free, and it loops perfectly.
 
----
-
-## How the two states animate
-
-- **SAD loop:** `creature_sad.png` shown continuously with a subtle CSS
-  *breathing* scale + a tiny nervous *tremble*. Every 2.5–5 s it briefly swaps
-  to `creature_sad_blink.png` (≈140 ms) for a slow, sad blink.
-- **HAPPY loop:** a **jump-for-joy** driven entirely from `main.js`
-  (`requestAnimationFrame`). A parabolic arc lifts the creature
-  (`translateY`) with squash on the ground and stretch in the air, while a
-  grounded contact shadow shrinks and fades. The displayed pose is chosen from
-  the phase of the jump: **crouch** at the bottom, **mid** while rising/falling,
-  **apex** (arms up) at the top. A praise word
-  (`Nice! / Great! / Awesome! / Perfect!`) pops once on entry with an energy
-  burst.
-
----
-
-## Three pages (creature / win / fail)
-
-The main creature screen has two labelled buttons at the bottom:
-
-- **WIN** (right) → opens the victory endcard.
-- **FAIL** (left) → opens the defeat endcard.
-
-Each popup has a **return arrow** (bottom-left, `‹`) back to the creature view.
-Navigation is a tiny pager in `main.js` (`goToPage("creature" | "win" | "fail")`);
-opening a popup freezes the creature behind it (the dimmed, blurred "gameplay").
-
-## Win endcard (victory popup)
-
-The **WIN** button opens a victory endcard popup (Royal Match / Toon Blast
-style) that celebrates the rescue and pushes the install. The **return arrow**
-(bottom-left) goes back to the creature view.
-
-- **Behind:** the creature scene stays in place, darkened + blurred
-  (`backdrop-filter`), so it reads as a popup over paused gameplay.
-- **Card:** premium rounded card with gold/blue glow; `NICE!` headline (bounce
-  in, then idle pulse); the rescued dragon (`assets/dragon/dragon_happy.png`)
-  with sunburst rays and a living idle loop (bounce + sway + breathe); a green
-  `RESCUE MORE FRIENDS!` CTA (pulse + shine sweep); a few slow floating sparkles.
-- **Entrance (~1s):** backdrop fade → card slides up + scales → `NICE!` bounces →
-  dragon hops → CTA appears. Re-runs every time you open the page.
-- **All CSS/transform/opacity** — no libraries, no canvas, GPU-friendly.
-
-**CTA wiring (for the engineer):** clicking the CTA calls `onInstallClick()` in
-`main.js`. It tries `mraid.open(STORE_URL)` if MRAID is present, otherwise logs
-and shows a placeholder toast. Replace `STORE_URL` (top of `main.js`) and/or the
-body of `onInstallClick()` with the real store link / network call.
-
-## Fail endcard (defeat popup)
-
-The **FAIL** button opens a gentle defeat popup — empathetic, not punishing:
-
-- **Magical night-sky card:** purple/violet gradient with a lilac glow border.
-- **`ALMOST!`** headline — a generated glossy 3D bubble logo (`assets/ui/almost.png`),
-  wobbles in; overhangs the card top (the card is not clipped).
-- **Soft clouds** drifting behind the dragon + a few twinkling night-sky stars.
-- **Sad dragon** (`assets/dragon/dragon_sad.png`) centered with a soft glow,
-  a slow sad-breathing loop and the occasional blink (`dragon_sad_blink.png`).
-- A small **thought balloon** with a **broken heart** that wobbles gently.
-- Secondary line **"Your friend still needs your help!"**.
-- A green **`SAVE THE DRAGON`** CTA (gold frame, pulse + shine) → `onInstallClick()`.
-- A few soft **night-sky stars** that twinkle in, rise, and fade (not confetti).
-
-**SFX hooks:** `main.js` has comments marking where to play the failure bonk,
-popup whoosh, headline bloop, broken-heart tink, retry click, and install
-sparkle — the showcase ships silent; the engineer wires the actual sounds.
-
-## Add or swap a creature
-
-1. Create `assets/creatures/<new_id>/` and drop its `source.png`.
-2. Generate the five sprites (same pipeline as above): background-remove the
-   base for `creature_sad.png`, then image-edit the original for the blink and
-   the three happy poses. Normalize each state's sprites to a common canvas so
-   they align.
-3. Add one entry to the `CREATURES` array in **`main.js`**:
-
-```js
-{
-  id: "fox_red",
-  name: "Red Fox",
-  base: "assets/creatures/fox_red/",
-  sad:   { base: "creature_sad.png", blink: "creature_sad_blink.png" },
-  happy: {
-    poses: {
-      crouch: "creature_happy_crouch.png",
-      mid: "creature_happy.png",
-      apex: "creature_happy_apex.png",
-    },
-    periodMs: 720,    // one full jump cycle
-    jumpFactor: 0.2,  // peak lift as a fraction of the creature's height
-  },
-}
-```
-
-That's all — the UI, the left/right arrows, and the animation engine are
-generic. With more than one creature the arrows automatically become active
-(they're dimmed at the ends of the roster).
-
----
-
-## How the gameplay engineer uses these files
-
-The showcase is a **reference for behaviour**, but the asset files are
-production-usable as-is (transparent PNGs):
-
-- **Idle / caged creature:** use `creature_sad.png` as the sprite and flash
-  `creature_sad_blink.png` on a timer for the blink. Breathing/tremble is a
-  simple transform tween — see the `@keyframes breathe` values in `styles.css`.
-- **Rescue celebration:** reproduce the jump by tweening vertical position +
-  squash/stretch (see `startJump()` in `main.js` for the exact math) and
-  swapping the three happy poses by jump phase. Or, if your engine prefers, the
-  three poses can be played as a simple flipbook.
-- **Timing reference (calibrated values):** blink ≈140 ms, blink interval
-  1.3–5.7 s, breathe ≈1.25 s, shiver every ≈7.3 s, jump period ≈600 ms, jump
-  lift ≈21 % of creature height, squash/stretch ≈8 %, praise pop ≈1.4 s — all in
-  the `TUNING` object in `main.js` (timings/intensity) and `styles.css` (praise).
-
-Everything is isolated per creature, so assets and timings can be lifted one
-creature at a time without touching the rest.
+**Timing reference (calibrated, in `TUNING` in `main.js`):** blink ≈140 ms,
+blink interval 1.3–5.7 s, breathe ≈1.25 s, shiver every ≈7.3 s, jump period
+≈600 ms, jump lift ≈21 % of height, squash/stretch ≈8 %.

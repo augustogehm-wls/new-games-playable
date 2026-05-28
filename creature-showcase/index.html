@@ -2,11 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Creature Showcase</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- ambient background: layered bloom blobs + soft vignette (CSS-only) -->
+  <div id="bgFx" aria-hidden="true">
+    <span class="bloom bloom-a"></span>
+    <span class="bloom bloom-b"></span>
+    <span class="bloom bloom-c"></span>
+    <div id="vignette"></div>
+  </div>
+
   <!-- ===========================================================
        CREATURE SHOWCASE
        A visual handoff document. Shows one isolated creature that
@@ -16,39 +24,112 @@
        =========================================================== -->
 
   <main id="stage">
-    <!-- Creature name label -->
-    <header id="topbar">
-      <span id="creatureName">Blue Dragon</span>
+
+    <!-- =========================================================
+         TOP BAR (HUD) — casual-mobile gameplay chrome.
+         Left: back + retry. Center: lives (hearts). Right: settings.
+         Icon glyphs are pulled from the HomeScreen reference art; the
+         lilac chip + shadow come from CSS. Wired in main.js.
+         ========================================================= -->
+    <header id="hud">
+      <div class="hud-side hud-left">
+        <button id="backBtn" class="icon-btn" type="button" aria-label="Back">
+          <img src="assets/ui/ic_back.png" alt="" draggable="false" />
+        </button>
+        <button id="retryBtn" class="icon-btn" type="button" aria-label="Retry">
+          <img src="assets/ui/ic_retry.png" alt="" draggable="false" />
+        </button>
+      </div>
+      <!-- 3 hearts injected by main.js so they can break/respawn cleanly -->
+      <div id="hearts" class="hud-center" aria-label="Lives"></div>
+      <div class="hud-side hud-right">
+        <button id="settingsBtn" class="icon-btn" type="button" aria-label="Settings">
+          <img src="assets/ui/ic_settings.png" alt="" draggable="false" />
+        </button>
+      </div>
     </header>
 
-    <!-- The animated creature lives here. The <img> source is swapped
-         by main.js for blink frames / jump flipbook frames. The wrapper
-         carries the CSS state animations (breathing, jump arc). -->
-    <section id="creatureArea">
-      <div id="glow"></div>                       <!-- soft spotlight behind creature -->
+    <!-- Level label pill (cosmetic — bump the number in main.js / LEVEL) -->
+    <div id="levelPill">Level <span id="levelNum">23</span></div>
+
+    <!-- =========================================================
+         PUZZLE AREA — fake scripted puzzle.
+         A maze of thick navy arrows surrounds the dragon, who is
+         trapped behind a rounded "window" cage. Solving (or tapping
+         the hinted arrow) slides the cage open and frees him.
+         ========================================================= -->
+    <section id="puzzleArea">
+      <div id="maze" aria-hidden="true"></div>     <!-- scripted arrows injected by main.js -->
+      <div id="fx" aria-hidden="true"></div>        <!-- ambient sparkles + magic bursts -->
+
+      <div id="glow"></div>                         <!-- soft spotlight behind creature -->
       <div id="creatureWrap">
-        <img id="creatureImg" alt="creature" draggable="false" />
-        <div id="shadow"></div>                   <!-- contact shadow for grounding -->
+        <img id="creatureImg" alt="trapped creature" draggable="false" />
+        <div id="shadow"></div>                     <!-- contact shadow for grounding -->
       </div>
 
-      <!-- Praise word + energy burst, shown on rescue -->
+      <!-- The cage: a rounded window in FRONT of the dragon. Slides open on solve. -->
+      <div id="bars" aria-hidden="true">
+        <span class="bar bar-frame"></span>
+        <span class="bar bar-v"></span>
+        <span class="bar bar-h"></span>
+      </div>
+
+      <!-- Praise word + energy burst, shown on rescue (reused from v1) -->
       <div id="praiseLayer" aria-hidden="true">
         <div id="burst"></div>
         <div id="praiseText"></div>
       </div>
+
+      <!-- Tutorial hand for the hint (asset copied from another playable) -->
+      <div id="tutorHand" aria-hidden="true">
+        <img src="assets/hands/tutorial_hand.png" alt="" draggable="false" />
+      </div>
     </section>
 
-    <!-- Navigation: left opens the FAIL endcard, right opens the WIN endcard. -->
-    <nav id="arrows">
-      <button id="arrowLeft" class="nav-label nav-fail" aria-label="Show fail screen">FAIL</button>
-      <button id="arrowRight" class="nav-label nav-win" aria-label="Show win screen">WIN</button>
-    </nav>
-
-    <!-- Main action button. Toggles sad <-> happy. -->
-    <footer id="controls">
-      <button id="freeBtn">Free!</button>
+    <!-- =========================================================
+         BOTTOM BAR — instruction pill + hint badge, then SOLVE!.
+         ========================================================= -->
+    <footer id="bottomBar">
+      <div id="instruction">
+        <span class="paw" aria-hidden="true">&#128062;</span>
+        <span id="instructionText">Tap &amp; remove arrows to free the friend!</span>
+        <button id="hintBtn" class="hint-badge" type="button" aria-label="Hint">
+          <img src="assets/ui/ic_lamp.png" alt="" draggable="false" />
+          <span class="hint-count">+1</span>
+        </button>
+      </div>
+      <div id="actionRow">
+        <button id="solveBtn" type="button">SOLVE!</button>
+        <!-- TEMP test button: costs a heart per tap (3 -> fail). -->
+        <button id="wrongBtn" type="button">WRONG MOVE</button>
+      </div>
     </footer>
   </main>
+
+  <!-- ===========================================================
+       SETTINGS popup — mobile toggles for Music / SFX / Haptics.
+       Scale-in + fade. Toggles persist in memory (settings object).
+       =========================================================== -->
+  <div id="settingsPage" aria-hidden="true">
+    <div id="settingsBackdrop"></div>
+    <div id="settingsCard">
+      <h2 id="settingsTitle">Settings</h2>
+      <div class="toggle-row">
+        <span>Music</span>
+        <button class="switch is-on" type="button" data-key="music" aria-label="Toggle music"><span class="knob"></span></button>
+      </div>
+      <div class="toggle-row">
+        <span>SFX</span>
+        <button class="switch is-on" type="button" data-key="sfx" aria-label="Toggle sound effects"><span class="knob"></span></button>
+      </div>
+      <div class="toggle-row">
+        <span>Haptics</span>
+        <button class="switch is-on" type="button" data-key="haptics" aria-label="Toggle haptics"><span class="knob"></span></button>
+      </div>
+      <button id="settingsClose" type="button">Close</button>
+    </div>
+  </div>
 
   <!-- ===========================================================
        WIN ENDCARD — second "page", reached via the right arrow.

@@ -6,13 +6,22 @@
    ============================================================ */
 
 :root {
-  --bg-top: #ffe9c7;          /* warm cream */
-  --bg-bottom: #ffc1d8;       /* soft pink   */
-  --btn-a: #7be06b;           /* candy green */
+  /* gameplay screen — cool lavender (matches HomeScreen.png reference) */
+  --bg-top: #eef0ff;          /* light lavender */
+  --bg-bottom: #e6e4fb;       /* soft lilac     */
+  --btn-a: #7be06b;           /* candy green (SOLVE / CTAs) */
   --btn-b: #3fc23c;
   --btn-edge: #2a9a2e;
-  --arrow-bg: #ffffff;
-  --arrow-fg: #ff8fb0;
+  /* puzzle ink — thick navy arrows + cage bars */
+  --navy: #2b2150;            /* deep navy (shared with praise stroke) */
+  --navy-soft: #4a3f7a;       /* lighter navy for outlines/inactive */
+  --hint-glow: #ffd34d;       /* gold glow on the hinted arrow */
+  /* HUD chrome */
+  --chip-bg: #ffffff;         /* white circle buttons / pills */
+  --chip-ink: #2b2150;        /* navy icon/text inside chips */
+  --chip-edge: #d9d4f0;       /* soft lilac chip shadow */
+  --heart-full: #ff4d5e;      /* live heart */
+  --heart-empty: #c9c4e0;     /* lost heart */
   --praise-fill: #ffffff;
   --praise-stroke: #2b2150;   /* deep navy outline */
   --praise-glow: #ffd34d;     /* gold             */
@@ -33,60 +42,372 @@ html, body {
 }
 
 body {
-  /* Solid kawaii gradient backdrop (not transparent), nothing that
-     overpowers the foreground creature. */
-  background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+  /* Cool lavender gameplay backdrop. The endcards lay their own
+     darkened overlay on top, so this is only seen on the puzzle screen. */
+  background:
+    radial-gradient(130% 70% at 50% 4%, #fbfaff 0%, transparent 52%),
+    radial-gradient(90% 60% at 12% 30%, #e4ecff88 0%, transparent 60%),
+    radial-gradient(90% 70% at 88% 82%, #ffe6f388 0%, transparent 62%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+}
+
+/* ---- Ambient background FX (bloom blobs + vignette) ------------- */
+#bgFx { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.bloom {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(46px);
+  opacity: 0.55;
+  will-change: transform;
+}
+.bloom-a {
+  width: 62vmin; height: 62vmin; left: -14vmin; top: -10vmin;
+  background: radial-gradient(circle, #cdd8ff 0%, transparent 70%);
+  animation: bloomDrift 14s ease-in-out infinite;
+}
+.bloom-b {
+  width: 54vmin; height: 54vmin; right: -12vmin; top: 24vmin;
+  background: radial-gradient(circle, #ffd6ec 0%, transparent 70%);
+  animation: bloomDrift 18s ease-in-out infinite reverse;
+}
+.bloom-c {
+  width: 70vmin; height: 70vmin; left: 20vmin; bottom: -22vmin;
+  background: radial-gradient(circle, #fff2cf 0%, transparent 70%);
+  opacity: 0.4;
+  animation: bloomDrift 22s ease-in-out infinite;
+}
+@keyframes bloomDrift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(3vmin, -3vmin) scale(1.08); }
+}
+#vignette {
+  position: absolute; inset: 0;
+  background: radial-gradient(125% 100% at 50% 42%, transparent 56%, rgba(90, 72, 150, 0.16) 100%);
 }
 
 /* ---- Layout ---------------------------------------------------- */
 
 #stage {
   position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  padding: clamp(12px, 3vh, 28px) 16px;
+  justify-content: flex-start;
+  /* respect notches / safe areas — no UI touches the edges */
+  padding:
+    calc(clamp(10px, 2.4vh, 22px) + env(safe-area-inset-top))
+    calc(clamp(10px, 3vw, 18px) + env(safe-area-inset-right))
+    calc(clamp(10px, 2.4vh, 22px) + env(safe-area-inset-bottom))
+    calc(clamp(10px, 3vw, 18px) + env(safe-area-inset-left));
+  gap: clamp(6px, 1.4vh, 14px);
 }
 
-#topbar {
+/* ---- Top bar (HUD) --------------------------------------------- */
+
+#hud {
   flex: 0 0 auto;
-  text-align: center;
-}
-
-#creatureName {
-  font-size: clamp(18px, 3.4vh, 30px);
-  color: #6b4a8e;
-  letter-spacing: 0.5px;
-  text-shadow: 0 2px 0 #ffffffaa;
-}
-
-/* ---- Creature area --------------------------------------------- */
-
-#creatureArea {
-  position: relative;
-  flex: 1 1 auto;
   width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hud-side { display: flex; gap: clamp(8px, 2vw, 12px); align-items: center; }
+.hud-center { display: flex; gap: clamp(6px, 1.8vw, 10px); align-items: center; }
+
+/* circular soft-plastic chip buttons (back / retry / settings) */
+.icon-btn {
+  position: relative;
+  width: clamp(44px, 6.6vh, 56px);
+  height: clamp(44px, 6.6vh, 56px);
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(165deg, #ffffff 0%, #f3effc 55%, #e7e0f7 100%);
+  color: var(--chip-ink);
   display: flex;
   align-items: center;
   justify-content: center;
+  cursor: pointer;
+  /* layered depth: inner highlight + inner bottom shade + drop edge + ambient + rim */
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.95),
+    inset 0 -4px 5px rgba(120, 100, 180, 0.18),
+    0 5px 0 var(--chip-edge),
+    0 9px 16px rgba(70, 55, 130, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.45);
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
 }
-
-/* Soft spotlight behind the creature */
-#glow {
-  position: absolute;
-  width: min(70vh, 88vw);
-  height: min(70vh, 88vw);
+/* glossy top highlight */
+.icon-btn::before {
+  content: "";
+  position: absolute; left: 18%; top: 9%; width: 64%; height: 42%;
   border-radius: 50%;
-  background: radial-gradient(circle, #fffbe6 0%, #fff4c899 45%, transparent 70%);
-  filter: blur(4px);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0));
   pointer-events: none;
 }
+.icon-btn img { position: relative; width: 52%; height: auto; display: block; pointer-events: none; }
+.icon-btn:active {
+  transform: scale(0.9) translateY(2px);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.85),
+    inset 0 -2px 3px rgba(120, 100, 180, 0.2),
+    0 2px 0 var(--chip-edge),
+    0 4px 8px rgba(70, 55, 130, 0.2);
+}
+/* press bounce with soft overshoot, driven by .tapped class from main.js */
+.icon-btn.tapped { animation: chipBounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes chipBounce {
+  0% { transform: scale(1); } 35% { transform: scale(0.88); } 100% { transform: scale(1); }
+}
+#retryBtn.spin svg { animation: retrySpin 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes retrySpin { from { transform: rotate(0); } to { transform: rotate(-360deg); } }
+
+/* hearts — glossy, gently floating, satisfying break */
+.heart {
+  width: clamp(28px, 4.3vh, 36px);
+  height: clamp(28px, 4.3vh, 36px);
+  position: relative;
+  color: var(--heart-full);
+  transition: color 0.15s ease;
+}
+.heart-core {
+  position: relative;
+  width: 100%; height: 100%;
+  will-change: transform;
+  animation: heartFloat 3s ease-in-out infinite;
+}
+/* heart art is the HomeScreen reference heart (already glossy) */
+.heart img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(150, 30, 55, 0.35)); }
+.heart.empty img { filter: grayscale(1) brightness(1.15) opacity(0.4); }
+.heart.empty .heart-core { animation: none; }
+@keyframes heartFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2.5px); }
+}
+.heart.breaking { animation: heartShake 0.34s ease; }
+@keyframes heartShake {
+  0%,100% { transform: translateX(0) rotate(0); }
+  20% { transform: translateX(-3px) rotate(-8deg) scale(1.2); }
+  40% { transform: translateX(3px) rotate(8deg) scale(1.2); }
+  60% { transform: translateX(-2px) rotate(-5deg) scale(1.1); }
+  80% { transform: translateX(2px) rotate(4deg) scale(1.05); }
+}
+.heart.flash { color: #ff2438 !important; }
+.heart .heart-core.shatter { animation: heartShatter 0.32s ease forwards; }
+@keyframes heartShatter {
+  to { transform: scale(0.08) rotate(46deg); opacity: 0; }
+}
+/* soft red glow pulse on loss */
+.heart .redglow {
+  position: absolute; left: 50%; top: 50%;
+  width: 170%; height: 170%; border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.5);
+  background: radial-gradient(circle, rgba(255, 60, 80, 0.55) 0%, transparent 64%);
+  pointer-events: none;
+  animation: redGlowPulse 0.55s ease-out forwards;
+}
+@keyframes redGlowPulse {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+  35% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.6); }
+}
+/* radial shockwave ring + shard fragments appended by main.js */
+.heart .shock {
+  position: absolute; left: 50%; top: 50%;
+  width: 100%; height: 100%; border-radius: 50%;
+  border: 2.5px solid rgba(255, 60, 80, 0.85);
+  transform: translate(-50%, -50%) scale(0.3);
+  pointer-events: none;
+  animation: shockwave 0.55s ease-out forwards;
+}
+@keyframes shockwave {
+  0% { opacity: 0.95; transform: translate(-50%, -50%) scale(0.3); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(3.4); }
+}
+.heart .shard {
+  position: absolute; left: 50%; top: 50%;
+  width: 6px; height: 6px; border-radius: 2px;
+  background: linear-gradient(180deg, #ff7385, var(--heart-full));
+  box-shadow: 0 0 4px rgba(255, 70, 90, 0.6);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: shardFly 0.6s ease-out forwards;
+}
+@keyframes shardFly {
+  0% { opacity: 1; transform: translate(-50%, -50%) translate(0,0) rotate(0); }
+  100% { opacity: 0; transform: translate(-50%, -50%) translate(var(--sx), var(--sy)) rotate(var(--sr)); }
+}
+
+/* level pill — layered floating white card */
+#levelPill {
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, #ffffff 0%, #f4f0fd 100%);
+  color: var(--chip-ink);
+  font-size: clamp(13px, 2.3vh, 19px);
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  padding: clamp(5px, 1vh, 8px) clamp(16px, 4.5vw, 26px);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.95),
+    0 4px 0 var(--chip-edge),
+    0 8px 16px rgba(90, 72, 150, 0.22);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+  animation: pillFloat 3.6s ease-in-out infinite;
+}
+@keyframes pillFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+
+/* ---- Puzzle area ----------------------------------------------- */
+
+#puzzleArea {
+  /* one knob drives the cage, the field, the glow and the dragon so they stay
+     proportional in BOTH orientations (field = cage * 2.1, centred together) */
+  --cage-size: min(30vh, 42vw);
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+}
+
+/* ---- Unblock puzzle: independent removable arrow pieces ---------
+   NOT connected pipes. Each .piece is its own arrow object that the player
+   removes in the correct order (Bus Jam / Parking Jam style). They congest
+   around the cage and visually block one another. #maze is just the field. */
+#maze {
+  /* centred square field (via flex static position, like the cage) */
+  position: absolute;
+  width: calc(var(--cage-size) * 2.1);
+  height: calc(var(--cage-size) * 2.1);
+  z-index: 4;
+  pointer-events: none;   /* each piece re-enables pointer events on itself */
+}
+
+.piece {
+  position: absolute;
+  transform: translate(-50%, -50%);   /* left/top are the piece centre */
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: transform, opacity;
+}
+.piece svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+  transform: rotate(var(--rot, 0deg));      /* orientation (static) */
+  filter: drop-shadow(0 3px 2px rgba(35, 26, 72, 0.32));
+}
+.pc-body { fill: none; stroke: #2b2156; stroke-width: 16; stroke-linecap: round; stroke-linejoin: round; }
+.pc-gloss { fill: none; stroke: rgba(255, 255, 255, 0.3); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; }
+.pc-head { fill: #2b2156; stroke: #1b1540; stroke-width: 3; stroke-linejoin: round; }
+
+/* press feedback (scale keeps the static rotation via the var) */
+.piece.press svg { transform: rotate(var(--rot, 0deg)) scale(0.94); }
+
+/* next-correct piece: gentle gold glow pulse (also the hint target) */
+.piece.next svg { animation: pieceNextGlow 1.2s ease-in-out infinite; }
+@keyframes pieceNextGlow {
+  0%,100% { filter: drop-shadow(0 3px 2px rgba(35, 26, 72, 0.32)) drop-shadow(0 0 4px var(--hint-glow)); }
+  50% { filter: drop-shadow(0 3px 2px rgba(35, 26, 72, 0.32)) drop-shadow(0 0 11px var(--hint-glow)) drop-shadow(0 0 18px var(--hint-glow)); }
+}
+
+/* wrong/blocked tap: shake (wrapper, screen-space) + red flash (svg) */
+.piece.blocked { animation: pieceShake 0.42s ease; }
+@keyframes pieceShake {
+  0%,100% { transform: translate(-50%, -50%); }
+  20% { transform: translate(calc(-50% - 4px), -50%); }
+  45% { transform: translate(calc(-50% + 4px), -50%); }
+  70% { transform: translate(calc(-50% - 3px), -50%); }
+  88% { transform: translate(calc(-50% + 2px), -50%); }
+}
+.piece.blocked svg { animation: pieceBlockFlash 0.42s ease; }
+@keyframes pieceBlockFlash {
+  0%,100% { filter: drop-shadow(0 3px 2px rgba(35, 26, 72, 0.32)); }
+  35% { filter: drop-shadow(0 0 9px rgba(255, 60, 90, 0.95)) drop-shadow(0 0 4px rgba(255, 60, 90, 0.9)); }
+}
+
+/* removing: pop, then slide out along the arrow's direction + fade */
+.piece.removing { animation: pieceRemove 0.42s cubic-bezier(0.4, 0, 0.2, 1) forwards; pointer-events: none; }
+@keyframes pieceRemove {
+  0% { opacity: 1; transform: translate(-50%, -50%); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--sx, 0px)), calc(-50% + var(--sy, 0px))) scale(0.7); }
+}
+/* fillers fade out when the cage releases */
+.piece.faded { animation: pieceFade 0.45s ease forwards; pointer-events: none; }
+@keyframes pieceFade { to { opacity: 0; transform: translate(-50%, -50%) scale(0.82); } }
+
+/* ambient sparkles + magic burst layer (above the pieces) */
+#fx { position: absolute; inset: 0; z-index: 5; pointer-events: none; overflow: visible; }
+.spark {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #fff3a8 50%, transparent 72%);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: sparkTwinkle var(--sdur, 3s) ease-in-out var(--sdelay, 0s) infinite;
+}
+@keyframes sparkTwinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  50% { opacity: 0.85; transform: scale(1); }
+}
+/* magic burst particles spawned where the bars dissolve */
+.magic {
+  position: absolute; left: 50%; top: 50%;
+  width: var(--mz, 12px); height: var(--mz, 12px);
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, var(--mc, #9ad0ff) 55%, transparent 75%);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: magicFly var(--mdur, 0.7s) ease-out forwards;
+}
+@keyframes magicFly {
+  0% { opacity: 1; transform: translate(-50%, -50%) translate(0,0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) translate(var(--mx), var(--my)) scale(0.2); }
+}
+/* slow-drifting magical dust — large, soft, very subtle (premium ambience) */
+.dust {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,0.7) 0%, rgba(207,224,255,0.4) 45%, transparent 72%);
+  filter: blur(1px);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: dustDrift var(--ddur, 9s) ease-in-out var(--ddelay, 0s) infinite;
+}
+@keyframes dustDrift {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.8); }
+  25% { opacity: var(--dop, 0.5); }
+  75% { opacity: var(--dop, 0.5); }
+  100% { opacity: 0; transform: translate(var(--dx, 0), var(--dy, -40px)) scale(1.1); }
+}
+
+/* Soft spotlight behind the creature. Grows on rescue via .freed. */
+#glow {
+  position: absolute;
+  z-index: 0;
+  width: calc(var(--cage-size) * 1.3);
+  height: calc(var(--cage-size) * 1.3);
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffdf2 0%, #fff0c0aa 42%, #cfe0ff66 60%, transparent 72%);
+  filter: blur(4px);
+  opacity: 0.85;
+  pointer-events: none;
+  transition: transform 0.6s cubic-bezier(0.2,0.8,0.3,1), opacity 0.6s ease;
+}
+#puzzleArea.freed #glow { transform: scale(1.55); opacity: 1; }
 
 #creatureWrap {
   position: relative;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -97,9 +418,10 @@ body {
 }
 
 #creatureImg {
-  height: min(46vh, 64vw);
+  /* sized to sit inside the cage window while trapped */
+  height: calc(var(--cage-size) * 0.86);
   width: auto;
-  max-width: 92vw;
+  max-width: 78vw;
   object-fit: contain;
   display: block;
   /* gentle drop shadow so the cutout doesn't float */
@@ -117,6 +439,79 @@ body {
   border-radius: 50%;
   z-index: -1;
   will-change: transform, opacity;
+}
+
+/* ---- Cage / bars (rounded navy window in FRONT of the dragon) --- */
+#bars {
+  position: absolute;
+  z-index: 3;
+  width: var(--cage-size);
+  height: var(--cage-size);
+  pointer-events: none;
+}
+/* soft grounding shadow beneath the cage so it sits in the scene */
+#bars::after {
+  content: "";
+  position: absolute;
+  left: 50%; bottom: -8%;
+  width: 76%; height: 12%;
+  transform: translateX(-50%);
+  background: radial-gradient(ellipse, rgba(60, 45, 110, 0.32) 0%, transparent 70%);
+  filter: blur(2px);
+  z-index: -1;
+}
+.bar {
+  position: absolute;
+  background: linear-gradient(180deg, #4a3f7a 0%, #2c2358 52%, #211a45 100%);
+  border-radius: 999px;
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.25),
+    inset 0 -3px 4px rgba(0, 0, 0, 0.25),
+    0 4px 10px rgba(43, 33, 80, 0.4);
+  will-change: transform, opacity;
+}
+.bar-frame {
+  inset: 0;
+  /* transparent centre so the dragon shows through the window */
+  background: transparent;
+  border: clamp(10px, 1.8vh, 15px) solid #2b2156;
+  border-radius: clamp(16px, 3vh, 26px);
+  box-shadow:
+    inset 0 2px 3px rgba(255, 255, 255, 0.22),
+    inset 0 -3px 4px rgba(0, 0, 0, 0.22),
+    0 8px 18px rgba(43, 33, 80, 0.34),
+    0 0 0 1px rgba(43, 33, 80, 0.15);
+}
+.bar-v { left: 50%; top: 4%; width: clamp(9px, 1.7vh, 14px); height: 92%; transform: translateX(-50%); }
+.bar-h { top: 50%; left: 4%; height: clamp(9px, 1.7vh, 14px); width: 92%; transform: translateY(-50%); }
+/* opening: each piece slides out + fades; whole cage scales up slightly */
+#bars.open { animation: cageOpen 0.55s ease forwards; }
+@keyframes cageOpen { to { transform: scale(1.18); opacity: 0; } }
+#bars.open .bar-frame { animation: barFrameOut 0.5s ease forwards; }
+#bars.open .bar-v { animation: barVOut 0.5s cubic-bezier(0.4,0,0.2,1) forwards; }
+#bars.open .bar-h { animation: barHOut 0.5s cubic-bezier(0.4,0,0.2,1) forwards; }
+@keyframes barFrameOut { to { transform: scale(1.35); opacity: 0; } }
+@keyframes barVOut { to { transform: translateX(-50%) translateY(-130%); opacity: 0; } }
+@keyframes barHOut { to { transform: translateY(-50%) translateX(130%); opacity: 0; } }
+
+/* ---- Tutorial hand (hint) -------------------------------------- */
+#tutorHand {
+  position: absolute;
+  z-index: 6;
+  width: clamp(52px, 9vh, 78px);
+  left: 0; top: 0;            /* positioned over the hinted arrow by main.js */
+  transform: translate(-50%, -10%);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+#tutorHand.show { opacity: 1; animation: handTap 1.2s ease-in-out infinite; }
+#tutorHand img { width: 100%; height: auto; display: block; filter: drop-shadow(0 4px 4px rgba(0,0,0,0.25)); }
+@keyframes handTap {
+  0%, 100% { transform: translate(-50%, -10%) scale(1); }
+  35% { transform: translate(-50%, 14%) scale(0.9); }
+  55% { transform: translate(-50%, 14%) scale(0.9); }
+  70% { transform: translate(-50%, -4%) scale(1); }
 }
 
 /* ---- SAD + HAPPY idle motion is driven from main.js -------------
@@ -203,113 +598,280 @@ body {
   100% { opacity: 0.0; transform: scale(1.6) rotate(48deg); }
 }
 
-/* ---- Arrows ---------------------------------------------------- */
+/* ---- Bottom bar: instruction pill + hint, then SOLVE! ---------- */
 
-#arrows {
+#bottomBar {
   flex: 0 0 auto;
   width: 100%;
-  max-width: 520px;
+  max-width: 560px;
   display: flex;
-  justify-content: space-between;
-  padding: 0 6vw;
-  margin-bottom: clamp(8px, 2vh, 16px);
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(8px, 1.6vh, 14px);
+  padding-bottom: clamp(4px, 1.6vh, 14px);
 }
 
-.arrow {
-  width: clamp(46px, 7vh, 60px);
-  height: clamp(46px, 7vh, 60px);
+/* instruction — floating creamy card with an integrated paw chip */
+#instruction {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: linear-gradient(180deg, #ffffff 0%, #f5f1fd 100%);
+  color: var(--chip-ink);
+  border-radius: 22px;
+  padding: clamp(8px, 1.5vh, 12px) clamp(10px, 3vw, 16px);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.95),
+    0 4px 0 var(--chip-edge),
+    0 11px 22px rgba(70, 55, 130, 0.2);
+  font-weight: 800;
+  font-size: clamp(12px, 2vh, 16px);
+}
+#instruction .paw {
+  flex: 0 0 auto;
+  width: clamp(28px, 4.4vh, 36px);
+  height: clamp(28px, 4.4vh, 36px);
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.95em; line-height: 1;
+  background: linear-gradient(180deg, #eef0ff, #dde1fa);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.95), 0 2px 4px rgba(70, 55, 130, 0.2);
+}
+#instructionText { flex: 1 1 auto; text-align: left; line-height: 1.18; }
+
+/* hint badge — glossy gold bulb + count */
+.hint-badge {
+  flex: 0 0 auto;
+  position: relative;
+  width: clamp(40px, 6vh, 52px);
+  height: clamp(40px, 6vh, 52px);
   border-radius: 50%;
   border: none;
-  background: var(--arrow-bg);
-  color: var(--arrow-fg);
-  font-size: clamp(20px, 3.2vh, 28px);
-  font-weight: 900;
-  box-shadow: 0 4px 0 #e7a9bf, 0 6px 10px rgba(0,0,0,0.15);
-  cursor: pointer;
+  /* white chip (matches HomeScreen) holding the glossy lamp */
+  background: linear-gradient(180deg, #ffffff 0%, #f4f1fb 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.08s ease;
+  cursor: pointer;
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.95),
+    0 3px 0 var(--chip-edge),
+    0 6px 12px rgba(70, 55, 130, 0.25),
+    0 0 12px rgba(255, 200, 70, 0.4);
+  transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
+}
+.hint-badge img { position: relative; width: 82%; height: auto; display: block; pointer-events: none; }
+.hint-badge:active {
+  transform: scale(0.9) translateY(2px);
+  box-shadow: inset 0 2px 2px rgba(255,255,255,0.9), 0 2px 0 var(--chip-edge), 0 4px 8px rgba(70,55,130,0.2);
+}
+.hint-badge .hint-count {
+  position: absolute; right: -4px; top: -4px;
+  background: #ff4d5e; color: #fff;
+  font-size: 0.62em; font-weight: 900;
+  border-radius: 999px; padding: 1px 5px;
+  border: 1.5px solid #fff;
+  box-shadow: 0 2px 4px rgba(180, 30, 50, 0.35);
 }
 
-.arrow:active { transform: translateY(3px); box-shadow: 0 1px 0 #e7a9bf; }
-
-/* dimmed = no neighbouring creature in that direction */
-.arrow.disabled {
-  opacity: 0.35;
-  cursor: default;
-  box-shadow: 0 4px 0 #d9c3cd;
-}
-.arrow.disabled:active { transform: none; }
-
-/* main-screen navigation labels: FAIL (left) and WIN (right) */
-.nav-label {
+/* SOLVE! — candy, glossy, the primary gameplay action */
+#solveBtn {
+  min-width: clamp(180px, 64vw, 300px);
+  padding: clamp(14px, 2.3vh, 20px) 28px;
   border: none;
-  padding: clamp(8px, 1.6vh, 12px) clamp(18px, 6vw, 30px);
   border-radius: 999px;
   font-family: var(--font);
-  font-size: clamp(15px, 2.6vh, 20px);
+  font-size: clamp(22px, 4vh, 34px);
   font-weight: 900;
-  letter-spacing: 1.5px;
   color: #ffffff;
-  -webkit-text-stroke: 1px rgba(0, 0, 0, 0.22);
+  letter-spacing: 1.5px;
+  background: linear-gradient(180deg, #8aee6f 0%, #5cd34a 50%, #3fc23c 100%);
+  -webkit-text-stroke: 1px #2a7a2e;
   text-shadow: 0 2px 2px rgba(0, 0, 0, 0.25);
+  /* candy depth: inner gloss + inner bottom shade + solid lip + ambient + green halo */
+  box-shadow:
+    inset 0 3px 2px rgba(255, 255, 255, 0.55),
+    inset 0 -5px 7px rgba(25, 110, 30, 0.4),
+    0 8px 0 var(--btn-edge),
+    0 15px 24px rgba(50, 160, 60, 0.4),
+    0 0 28px rgba(120, 224, 107, 0.45);
   cursor: pointer;
-  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.18), 0 6px 10px rgba(0, 0, 0, 0.15);
-  transition: transform 0.08s ease;
+  transition: transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
+  animation: solvePulse 2.6s ease-in-out infinite;
+  position: relative;
+  overflow: hidden;
 }
-.nav-label:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18); }
-.nav-fail { background: linear-gradient(180deg, #ff8093, #e94f63); }
-.nav-win { background: linear-gradient(180deg, #74e23a, #46b814); }
+/* top gloss highlight */
+#solveBtn::before {
+  content: "";
+  position: absolute; left: 6%; top: 9%; width: 88%; height: 36%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+#solveBtn:active {
+  transform: translateY(4px) scale(0.97);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.45),
+    inset 0 -3px 5px rgba(25, 110, 30, 0.4),
+    0 3px 0 var(--btn-edge),
+    0 6px 12px rgba(50, 160, 60, 0.35),
+    0 0 20px rgba(120, 224, 107, 0.4);
+}
+/* very gentle infinite pulse + periodic shine sweep */
+@keyframes solvePulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+}
+#solveBtn::after {
+  content: "";
+  position: absolute; top: 0; left: -60%;
+  width: 50%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,0.6), transparent);
+  transform: skewX(-18deg);
+  animation: solveShine 4.5s ease-in-out infinite;
+}
+@keyframes solveShine {
+  0%, 72% { left: -60%; }
+  86% { left: 130%; }
+  100% { left: 130%; }
+}
+#solveBtn:disabled { animation: none; opacity: 0.85; cursor: default; }
+#solveBtn.tapped { animation: chipBounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
-/* ---- Main button ----------------------------------------------- */
-
-#controls {
-  flex: 0 0 auto;
+/* SOLVE + WRONG MOVE share a row; both flex to fit */
+#actionRow {
   width: 100%;
   display: flex;
+  align-items: stretch;
   justify-content: center;
-  padding-bottom: clamp(6px, 2vh, 18px);
+  gap: clamp(8px, 2.4vw, 14px);
 }
+#actionRow #solveBtn { flex: 1 1 auto; min-width: 0; }
 
-#freeBtn {
-  min-width: clamp(180px, 42vw, 260px);
-  padding: clamp(14px, 2.4vh, 20px) 28px;
+/* red candy WRONG MOVE test button (mirrors SOLVE in red) */
+#wrongBtn {
+  flex: 0 0 auto;
+  padding: clamp(14px, 2.3vh, 20px) clamp(14px, 4vw, 22px);
   border: none;
   border-radius: 999px;
   font-family: var(--font);
-  font-size: clamp(24px, 4.4vh, 38px);
+  font-size: clamp(13px, 2.2vh, 18px);
   font-weight: 900;
   color: #ffffff;
-  letter-spacing: 1px;
-  background: linear-gradient(180deg, var(--btn-a), var(--btn-b));
-  border-bottom: 6px solid var(--btn-edge);
-  -webkit-text-stroke: 1px #2a7a2e;
-  text-shadow: 0 2px 2px rgba(0,0,0,0.25);
-  box-shadow: 0 8px 16px rgba(60, 160, 60, 0.35);
+  letter-spacing: 0.5px;
+  background: linear-gradient(180deg, #ff7a86 0%, #f0455a 50%, #d8324a 100%);
+  -webkit-text-stroke: 1px #a82138;
+  text-shadow: 0 2px 2px rgba(0, 0, 0, 0.28);
+  box-shadow:
+    inset 0 3px 2px rgba(255, 255, 255, 0.5),
+    inset 0 -5px 7px rgba(140, 20, 40, 0.4),
+    0 8px 0 #b3243c,
+    0 14px 22px rgba(200, 50, 70, 0.4),
+    0 0 24px rgba(255, 110, 130, 0.4);
   cursor: pointer;
-  transition: transform 0.08s ease, border-width 0.08s ease;
+  transition: transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.12s ease;
+  position: relative;
+  overflow: hidden;
 }
-
-#freeBtn:active {
-  transform: translateY(4px);
-  border-bottom-width: 2px;
+#wrongBtn::before {
+  content: "";
+  position: absolute; left: 6%; top: 9%; width: 88%; height: 36%;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  pointer-events: none;
 }
+#wrongBtn:active {
+  transform: translateY(4px) scale(0.97);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.4),
+    inset 0 -3px 5px rgba(140, 20, 40, 0.4),
+    0 3px 0 #b3243c,
+    0 6px 12px rgba(200, 50, 70, 0.35);
+}
+#wrongBtn.tapped { animation: chipBounce 0.34s cubic-bezier(0.34, 1.56, 0.64, 1); }
 
-/* happy variant recolours the button to a "reset/again" pink */
-#freeBtn.is-happy {
-  background: linear-gradient(180deg, #ffb14d, #ff8a3d);
-  border-bottom-color: #d96a1f;
-  -webkit-text-stroke: 1px #c45f1c;
-  box-shadow: 0 8px 16px rgba(220, 130, 40, 0.35);
+/* ---- Settings popup -------------------------------------------- */
+#settingsPage {
+  position: fixed; inset: 0; z-index: 60;
+  display: none; align-items: center; justify-content: center;
+}
+#settingsPage.show { display: flex; }
+#settingsBackdrop {
+  position: absolute; inset: 0;
+  background: rgba(40, 30, 70, 0.45);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: fadeIn 0.2s ease;
+}
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+#settingsCard {
+  position: relative;
+  width: min(86vw, 340px);
+  background: linear-gradient(180deg, #ffffff, #f3f0ff);
+  border-radius: 22px;
+  padding: clamp(18px, 4vw, 26px);
+  box-shadow: 0 18px 50px rgba(40, 30, 70, 0.4);
+  animation: popIn 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+@keyframes popIn { 0% { opacity: 0; transform: scale(0.8); } 100% { opacity: 1; transform: scale(1); } }
+#settingsCard h2 {
+  text-align: center; color: var(--chip-ink);
+  margin-bottom: clamp(12px, 3vw, 18px);
+  font-size: clamp(20px, 3vh, 26px);
+}
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: clamp(9px, 2vw, 13px) 4px;
+  font-size: clamp(15px, 2.2vh, 19px);
+  font-weight: 800; color: var(--chip-ink);
+  border-bottom: 1px solid #e7e2f7;
+}
+/* rounded mobile switch */
+.switch {
+  width: 52px; height: 30px; border-radius: 999px; border: none;
+  background: #cfc9e6; cursor: pointer; position: relative;
+  transition: background 0.18s ease;
+}
+.switch .knob {
+  position: absolute; top: 3px; left: 3px;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+  transition: transform 0.18s cubic-bezier(0.3,0.8,0.3,1.2);
+}
+.switch.is-on { background: #5bc85f; }
+.switch.is-on .knob { transform: translateX(22px); }
+#settingsClose {
+  width: 100%; margin-top: clamp(14px, 3vw, 20px);
+  padding: 12px; border: none; border-radius: 999px;
+  font-family: var(--font); font-weight: 900; font-size: clamp(16px, 2.4vh, 20px);
+  color: #fff; letter-spacing: 1px; cursor: pointer;
+  background: linear-gradient(180deg, var(--btn-a), var(--btn-b));
+  border-bottom: 5px solid var(--btn-edge);
+  box-shadow: 0 6px 12px rgba(60, 160, 60, 0.3);
+}
+#settingsClose:active { transform: translateY(3px); border-bottom-width: 2px; }
+
+/* ---- Screen shake (heart loss feedback) ------------------------ */
+#stage.shake { animation: screenShake 0.32s ease; }
+@keyframes screenShake {
+  0%,100% { transform: translate(0,0); }
+  20% { transform: translate(-4px, 2px); }
+  40% { transform: translate(4px, -2px); }
+  60% { transform: translate(-3px, -1px); }
+  80% { transform: translate(3px, 1px); }
 }
 
 /* ---- Landscape tweaks ------------------------------------------ */
 
 @media (orientation: landscape) {
-  #creatureImg { height: min(58vh, 40vw); }
-  #praiseLayer { top: 14%; }
-  #arrows { max-width: 60vw; }
+  #stage { gap: clamp(2px, 1vh, 8px); }
+  /* short vertical budget: shrink the cage so the field (=cage*2.1) still fits */
+  #puzzleArea { --cage-size: min(19vh, 40vw); }
+  #praiseLayer { top: 12%; }
+  #hud, #bottomBar, #puzzleArea { max-width: min(86vw, 760px); }
+  #solveBtn { min-width: clamp(180px, 36vw, 300px); }
 }
 
 /* (debug tuning panel removed — values baked into TUNING in main.js) */
