@@ -548,6 +548,68 @@ body {
 
 #creatureImg { transform-origin: 50% 100%; }
 
+/* ===== Creature Rescue additions: Spine canvas + switch arrows ===== */
+/* Generic hidden utility (used by the Spine canvas + SpineLayer.setVisible). */
+.hidden { display: none !important; }
+
+/* Shared Spine render surface. In-flow block so it gives its host (#creatureWrap
+   or the win/fail stages) a real box even when the dragon <img> is hidden.
+   Transparent (premultiplied shader) so the DOM cage/glow composite around it. */
+#spineCanvas {
+  width: var(--cage-size, min(30vh, 42vw));
+  height: var(--cage-size, min(30vh, 42vw));
+  max-width: 82vw;
+  display: block;
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+}
+/* Larger square in the endcards (reparented outside #puzzleArea, where
+   --cage-size no longer resolves, so the fallback above would apply). */
+#winStage > #spineCanvas,
+#failStage > #spineCanvas {
+  width: min(58vw, 244px);
+  height: min(58vw, 244px);
+  max-width: none;
+}
+
+/* Left/right arrows to cycle the roster (dragon + PP creatures + hurt variants). */
+.creature-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #2b2150;
+  border: none;
+  box-shadow: 0 6px 16px rgba(43, 33, 80, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 6;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.creature-arrow:hover { box-shadow: 0 10px 22px rgba(43, 33, 80, 0.24); }
+.creature-arrow:active { transform: translateY(-50%) scale(0.9); }
+.ca-left { left: 1%; }
+.ca-right { right: 1%; }
+
+/* Current creature's name on the win card. */
+#winName {
+  position: relative;
+  z-index: 1;
+  font-weight: 900;
+  font-size: clamp(20px, 5vw, 30px);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #5b3fa0;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.6);
+  margin-bottom: clamp(6px, 1.4vh, 12px);
+}
+
 /* ---- Praise word + energy burst -------------------------------- */
 
 #praiseLayer {

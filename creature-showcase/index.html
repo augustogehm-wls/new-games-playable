@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Creature Showcase</title>
+  <title>Creature Rescue</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -65,6 +65,9 @@
       <div id="glow"></div>                         <!-- soft spotlight behind creature -->
       <div id="creatureWrap">
         <img id="creatureImg" alt="trapped creature" draggable="false" />
+        <!-- Spine render surface for the Paradise Paws creatures (hidden for the PNG dragon).
+             Reparented into the win/fail stages on the endcards so the same creature shows there. -->
+        <canvas id="spineCanvas" class="hidden" aria-hidden="true"></canvas>
         <div id="shadow"></div>                     <!-- contact shadow for grounding -->
       </div>
 
@@ -85,6 +88,14 @@
       <div id="tutorHand" aria-hidden="true">
         <img src="assets/hands/tutorial_hand.png" alt="" draggable="false" />
       </div>
+
+      <!-- Creature-switch arrows: cycle the roster (dragon + PP creatures + hurt variants). -->
+      <button id="prevCreatureBtn" class="creature-arrow ca-left" type="button" aria-label="Previous creature">
+        <svg viewBox="0 0 24 24" width="30" height="30"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <button id="nextCreatureBtn" class="creature-arrow ca-right" type="button" aria-label="Next creature">
+        <svg viewBox="0 0 24 24" width="30" height="30"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </section>
 
     <!-- =========================================================
@@ -151,9 +162,13 @@
       <div id="winParticles" aria-hidden="true"></div>
 
       <div id="winStage">
-        <div id="winGlow"></div>   <!-- strong core glow behind the dragon -->
-        <img id="winDragon" src="assets/dragon/dragon_happy.png" alt="rescued dragon" draggable="false" />
+        <div id="winGlow"></div>   <!-- strong core glow behind the creature -->
+        <!-- For the dragon: PNG. For Spine creatures: this <img> is hidden and #spineCanvas is reparented here. -->
+        <img id="winDragon" src="assets/dragon/dragon_happy.png" alt="rescued creature" draggable="false" />
       </div>
+
+      <!-- Current creature's name (set per creature in main.js) -->
+      <div id="winName"></div>
 
       <!-- CTA with a golden frame around it (like the reference) -->
       <div id="ctaWrap">
@@ -208,6 +223,7 @@
     <button id="failBack" class="arrow" aria-label="Back to creature">&#10094;</button>
   </div>
 
+  <script src="vendor/spine-webgl.js"></script>
   <script src="main.js"></script>
 </body>
 </html>

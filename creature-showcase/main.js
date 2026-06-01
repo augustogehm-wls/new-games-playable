@@ -17,25 +17,53 @@
    ============================================================ */
 
 // ---- Creature roster -------------------------------------------------
+// Two render types:
+//   type "img"   — PNG-frame creature (the original dragon): sad = breathing+blink,
+//                  happy = JS jump arc swapping pose sprites.
+//   type "spine" — Paradise Paws Spine creature rendered on #spineCanvas via SpineLayer:
+//                  sad = crying loop, happy = trigger_excited. Hurt slots carry a
+//                  `healSkin` so freeing them swaps the skin from hurt -> healed.
+// Hurt variants are SEPARATE slots (the arrows treat them like another creature).
 const CREATURES = [
   {
     id: "dragon_blue",
     name: "Blue Dragon",
+    type: "img",
     base: "assets/creatures/dragon_blue/",
-    sad: {
-      base: "creature_sad.png",
-      blink: "creature_sad_blink.png",
-    },
+    sad: { base: "creature_sad.png", blink: "creature_sad_blink.png" },
     happy: {
       // jump pose frames; the arc/timing live in TUNING.happy
-      poses: {
-        crouch: "creature_happy_crouch.png",
-        mid: "creature_happy.png",
-        apex: "creature_happy_apex.png",
-      },
+      poses: { crouch: "creature_happy_crouch.png", mid: "creature_happy.png", apex: "creature_happy_apex.png" },
     },
   },
+
+  { id: "squirrel",      name: "Squirrel", type: "spine", spineId: "squirrel", skin: "lv1",
+    sadAnim: "anim_squirrel_crying_cage",  happyAnim: "anim_squirrel_trigger_excited" },
+  { id: "squirrel_hurt", name: "Squirrel", type: "spine", spineId: "squirrel", skin: "lv1_hurt", healSkin: "lv1",
+    sadAnim: "anim_squirrel_crying_cage",  happyAnim: "anim_squirrel_trigger_excited" },
+
+  { id: "kudu",      name: "Kudu", type: "spine", spineId: "kudu", skin: "lv1",
+    sadAnim: "anim_kudu_crying_legtrap", happyAnim: "anim_kudu_trigger_excited" },
+  { id: "kudu_hurt", name: "Kudu", type: "spine", spineId: "kudu", skin: "lv1_hurt", healSkin: "lv1",
+    sadAnim: "anim_kudu_crying_legtrap", happyAnim: "anim_kudu_trigger_excited" },
+
+  { id: "zebra",      name: "Zebra", type: "spine", spineId: "zebra", skin: "lv1",
+    sadAnim: "anim_zebra_crying", happyAnim: "anim_zebra_trigger_excited" },
+  // Zebra's only hurt skin lives on lv2 (no lv1_hurt), so this slot rides lv2/lv2_hurt.
+  { id: "zebra_hurt", name: "Zebra", type: "spine", spineId: "zebra", skin: "lv2_hurt", healSkin: "lv2",
+    sadAnim: "anim_zebra_crying", happyAnim: "anim_zebra_trigger_excited" },
+
+  { id: "flamingo", name: "Flamingo", type: "spine", spineId: "flamingo", skin: "lv1",
+    sadAnim: "anim_flamingo_crying", happyAnim: "anim_flamingo_trigger_excited" },
 ];
+
+// Spine asset sources (paths + the idle anim used for stable bounds framing).
+const SPINE_SOURCES = {
+  squirrel: { path: "assets/creatures/squirrel/", base: "char_squirrel", idle: "anim_squirrel_idle_01" },
+  kudu:     { path: "assets/creatures/kudu/",     base: "char_kudu",     idle: "anim_kudu_idle_01" },
+  zebra:    { path: "assets/creatures/zebra/",    base: "char_zebra",    idle: "anim_zebra_idle_01" },
+  flamingo: { path: "assets/creatures/flamingo/", base: "char_flamingo", idle: "anim_flamingo_idle_01" },
+};
 
 const PRAISE_WORDS = ["Nice!", "Great!", "Awesome!", "Perfect!"];
 
@@ -68,6 +96,7 @@ const els = {
   stage: document.getElementById("stage"),
   wrap: document.getElementById("creatureWrap"),
   img: document.getElementById("creatureImg"),
+  spineCanvas: document.getElementById("spineCanvas"),
   shadow: document.getElementById("shadow"),
   praiseText: document.getElementById("praiseText"),
   burst: document.getElementById("burst"),
@@ -78,6 +107,8 @@ const els = {
   bgFx: document.getElementById("bgFx"),
   bars: document.getElementById("bars"),
   tutorHand: document.getElementById("tutorHand"),
+  prevCreatureBtn: document.getElementById("prevCreatureBtn"),
+  nextCreatureBtn: document.getElementById("nextCreatureBtn"),
   hearts: document.getElementById("hearts"),
   levelNum: document.getElementById("levelNum"),
   backBtn: document.getElementById("backBtn"),
@@ -97,10 +128,15 @@ const els = {
   winGlowParticles: document.getElementById("winGlowParticles"),
   winBack: document.getElementById("winBack"),
   ctaBtn: document.getElementById("ctaBtn"),
+  winStage: document.getElementById("winStage"),
+  winDragon: document.getElementById("winDragon"),
+  winName: document.getElementById("winName"),
   // fail endcard
   failPage: document.getElementById("failPage"),
   failStars: document.getElementById("failStars"),
   failDragon: document.getElementById("failDragon"),
+  failStage: document.getElementById("failStage"),
+  failSubtext: document.getElementById("failSubtext"),
   failBack: document.getElementById("failBack"),
   failCtaBtn: document.getElementById("failCtaBtn"),
 };
@@ -253,6 +289,119 @@ function preloadCreature(c) {
   Object.values(c.happy.poses).forEach((p) => preload(c.base + p));
 }
 
+// ---- Spine render layer (Paradise Paws creatures) --------------------
+// One shared <canvas> + one SpineCanvas app renders the current Spine creature
+// transparently (premultiplied shader) so the DOM cage/glow composite around it.
+// The canvas is reparented into the win/fail stages on the endcards.
+let spineLayer = null;
+
+class SpineLayer {
+  constructor(canvasEl) {
+    this.canvasEl = canvasEl;
+    this.ready = false;
+    this.active = false;
+    this.skeleton = null;
+    this.state = null;
+    this.naturalBounds = null;
+    this.pending = null;       // a show() requested before assets finished loading
+    this.curIdle = null;
+    this.canvas = null;
+    this._spine = new spine.SpineCanvas(canvasEl, { app: this });
+  }
+  // ---- SpineCanvasApp interface ----
+  loadAssets(canvas) {
+    Object.values(SPINE_SOURCES).forEach((s) => {
+      canvas.assetManager.loadBinary(s.path + s.base + ".skel.bytes");
+      canvas.assetManager.loadTextureAtlas(s.path + s.base + ".atlas.txt");
+    });
+  }
+  initialize(canvas) {
+    this.canvas = canvas;
+    this.ready = true;
+    if (this.pending) { const p = this.pending; this.pending = null; this.show(p.id, p.skin, p.anim, p.loop); }
+  }
+  error(canvas, errors) { console.error("[SpineLayer] asset load failed", errors); }
+
+  // Build + show a creature in a given skin, playing `anim` (loop, or once -> idle).
+  show(id, skin, anim, loop) {
+    if (!this.ready) { this.pending = { id, skin, anim, loop }; this.active = true; return; }
+    const src = SPINE_SOURCES[id];
+    const am = this.canvas.assetManager;
+    const atlas = am.require(src.path + src.base + ".atlas.txt");
+    const skelBin = new spine.SkeletonBinary(new spine.AtlasAttachmentLoader(atlas));
+    skelBin.scale = 1;
+    const data = skelBin.readSkeletonData(am.require(src.path + src.base + ".skel.bytes"));
+    this.skeleton = new spine.Skeleton(data);
+    const skins = data.skins.map((s) => s.name);
+    const chosen = skins.includes(skin) ? skin : skins[0];
+    this.skeleton.setSkinByName(chosen);
+    this.skeleton.setSlotsToSetupPose();
+    const sd = new spine.AnimationStateData(data);
+    sd.defaultMix = 0.15;
+    this.state = new spine.AnimationState(sd);
+    // Frame from the idle pose's bounds (stable; the playing anim keeps this framing).
+    this.state.setAnimation(0, src.idle, true);
+    this.state.update(0); this.state.apply(this.skeleton);
+    this.skeleton.x = 0; this.skeleton.y = 0; this.skeleton.scaleX = 1; this.skeleton.scaleY = 1;
+    this.skeleton.updateWorldTransform(spine.Physics.update);
+    const off = new spine.Vector2(), sz = new spine.Vector2();
+    this.skeleton.getBounds(off, sz);
+    this.naturalBounds = { offsetX: off.x, offsetY: off.y, sizeX: sz.x, sizeY: sz.y };
+    this.curIdle = src.idle;
+    this.state.setAnimation(0, anim, loop);
+    if (!loop) this.state.addAnimation(0, src.idle, true, 0);
+    this.active = true;
+  }
+  // Rescue: optionally heal (swap skin) then play the excited anim once -> idle.
+  celebrate(excitedAnim, healSkin) {
+    if (!this.ready || !this.skeleton || !this.state) return;
+    if (healSkin) { this.skeleton.setSkinByName(healSkin); this.skeleton.setSlotsToSetupPose(); }
+    this.state.setAnimation(0, excitedAnim, false);
+    if (this.curIdle) this.state.addAnimation(0, this.curIdle, true, 0);
+  }
+  attachTo(container) {
+    if (this.canvasEl.parentElement !== container) container.appendChild(this.canvasEl);
+  }
+  setVisible(v) {
+    this.active = v;
+    this.canvasEl.classList.toggle("hidden", !v);
+  }
+  // ---- render loop ----
+  update(canvas, delta) {
+    if (!this.active || !this.state || !this.skeleton) return;
+    this.state.update(delta); this.state.apply(this.skeleton);
+    this.skeleton.updateWorldTransform(spine.Physics.update);
+  }
+  render(canvas) {
+    if (!this.active || !this.skeleton || !this.naturalBounds) return;
+    const r = canvas.renderer;
+    r.resize(spine.ResizeMode.Expand);
+    canvas.clear(0, 0, 0, 0);            // transparent: the DOM cage/glow show around the creature
+    const nb = this.naturalBounds;
+    const vw = canvas.htmlCanvas.width, vh = canvas.htmlCanvas.height;
+    const padding = 0.82;
+    const scale = Math.min((vw * padding) / Math.max(nb.sizeX, 1), (vh * padding) / Math.max(nb.sizeY, 1));
+    this.skeleton.scaleX = scale; this.skeleton.scaleY = scale;
+    this.skeleton.x = -(nb.offsetX + nb.sizeX / 2) * scale;
+    this.skeleton.y = -(nb.offsetY + nb.sizeY / 2) * scale;
+    this.skeleton.updateWorldTransform(spine.Physics.update);
+    r.begin();
+    const sh = r.batcherShader;
+    sh.setUniform4f("u_tintColor", 1, 1, 1, 1);   // neutral tint (shader needs it or sprite renders black)
+    sh.setUniformf("u_tintBoost", 1);
+    r.drawSkeleton(this.skeleton, true);          // premultiplied alpha (matches the patched shader)
+    r.end();
+  }
+}
+
+// Toggle which renderer shows the creature: the PNG <img> (dragon) or the Spine canvas.
+function setRenderer(type) {
+  const isSpine = type === "spine";
+  if (spineLayer) spineLayer.setVisible(isSpine);
+  els.img.style.display = isSpine ? "none" : "";
+  els.shadow.style.display = isSpine ? "none" : "";
+}
+
 // ---- State engine ----------------------------------------------------
 function stopLoops() {
   if (blinkTimer) { clearTimeout(blinkTimer); blinkTimer = null; }
@@ -268,6 +417,13 @@ function stopLoops() {
 
 function showSad(c) {
   state = "sad";
+  if (c.type === "spine") {
+    setRenderer("spine");
+    spineLayer.attachTo(els.wrap);
+    spineLayer.show(c.spineId, c.skin, c.sadAnim, true);   // crying loop
+    return;
+  }
+  setRenderer("img");
   els.img.style.transformOrigin = "50% 100%";
   els.img.src = c.base + c.sad.base;
   startSadIdle();
@@ -328,6 +484,14 @@ function startBlinkLoop(c) {
 
 function showHappy(c) {
   state = "happy";
+  if (c.type === "spine") {
+    setRenderer("spine");
+    spineLayer.attachTo(els.wrap);
+    spineLayer.celebrate(c.happyAnim, c.healSkin || null);   // heal (if hurt) + excited
+    playPraise();
+    return;
+  }
+  setRenderer("img");
   els.img.style.transformOrigin = "50% 100%";
   startJump(c);
   playPraise();
@@ -406,8 +570,19 @@ function loadCreature(idx) {
   stopLoops();
   current = idx;
   const c = CREATURES[current];
-  preloadCreature(c);
+  if (c.type !== "spine") preloadCreature(c);   // spine creatures are preloaded by SpineLayer
   showSad(c);
+}
+
+// Cycle the roster with the ‹ › arrows. Each switch is a fresh LOCKED puzzle for
+// the new creature. Inert while a popup is up or an animation has input locked.
+function switchCreature(dir) {
+  if (inputLocked || page !== "creature") return;
+  const n = CREATURES.length;
+  current = (current + dir + n) % n;
+  haptic("light");
+  sfx("button_click");
+  resetPuzzle();   // resets lives/bars/solved + showSad(CREATURES[current]); plays soft_pop
 }
 
 // ======================================================================
@@ -680,6 +855,14 @@ els.retryBtn.addEventListener("click", () => {
 els.backBtn.addEventListener("click", () => { pressFeedback(els.backBtn); resetPuzzle(); });
 els.settingsBtn.addEventListener("click", () => { pressFeedback(els.settingsBtn); openSettings(); });
 
+// Creature-switch arrows + keyboard (left/right cycle the roster).
+if (els.prevCreatureBtn) els.prevCreatureBtn.addEventListener("click", () => switchCreature(-1));
+if (els.nextCreatureBtn) els.nextCreatureBtn.addEventListener("click", () => switchCreature(1));
+window.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") switchCreature(-1);
+  else if (e.key === "ArrowRight") switchCreature(1);
+});
+
 els.settingsClose.addEventListener("click", () => { pressFeedback(els.settingsClose); closeSettings(); });
 els.settingsBackdrop.addEventListener("click", closeSettings);
 els.settingsPage.querySelectorAll(".switch").forEach((sw) => {
@@ -720,6 +903,7 @@ function goToPage(name) {
 }
 
 function showWin() {
+  setupWinCreature();
   applyWinTuning();
   spawnWinParticles();
   // toggling display restarts every CSS animation -> the entrance replays
@@ -727,6 +911,23 @@ function showWin() {
   void els.winPage.offsetWidth; // force reflow
   els.winPage.classList.add("show");
   els.winPage.setAttribute("aria-hidden", "false");
+}
+
+// Put the CURRENT creature into the win card: name + sprite (Spine canvas for PP
+// creatures — reparented here and already healed/celebrating; dragon PNG otherwise).
+function setupWinCreature() {
+  const c = CREATURES[current];
+  els.winName.textContent = c.name;
+  if (c.type === "spine") {
+    els.winDragon.style.display = "none";
+    spineLayer.attachTo(els.winStage);
+    spineLayer.setVisible(true);
+    spineLayer.celebrate(c.happyAnim, c.healSkin || null);   // replay excited as the card pops
+  } else {
+    spineLayer.setVisible(false);
+    els.winDragon.style.display = "";
+    els.winDragon.src = "assets/dragon/dragon_happy.png";
+  }
 }
 
 function hideWin() {
@@ -816,12 +1017,31 @@ function showFail() {
   fadeBgm(0, 500);
   sfx("fail_stinger");
   spawnFailStars();
-  startFailBlink();
+  setupFailCreature();
   // toggling display restarts the staged entrance every time
   els.failPage.classList.remove("show");
   void els.failPage.offsetWidth; // force reflow
   els.failPage.classList.add("show");
   els.failPage.setAttribute("aria-hidden", "false");
+}
+
+// Put the CURRENT creature into the fail card: name in the subtext + sad sprite
+// (Spine crying for PP creatures — stays hurt if it was a hurt slot; dragon PNG otherwise).
+function setupFailCreature() {
+  const c = CREATURES[current];
+  els.failSubtext.textContent = c.name + " still needs your help!";
+  if (els.failCtaBtn) els.failCtaBtn.textContent = "SAVE THE " + c.name.toUpperCase();
+  if (c.type === "spine") {
+    if (failBlinkTimer) { clearTimeout(failBlinkTimer); failBlinkTimer = null; }
+    els.failDragon.style.display = "none";
+    spineLayer.attachTo(els.failStage);
+    spineLayer.setVisible(true);
+    spineLayer.show(c.spineId, c.skin, c.sadAnim, true);   // still crying / still hurt
+  } else {
+    spineLayer.setVisible(false);
+    els.failDragon.style.display = "";
+    startFailBlink();
+  }
 }
 
 function hideFail() {
@@ -992,6 +1212,7 @@ function showToast(msg) {
 
 // ---- Boot ------------------------------------------------------------
 if (els.levelNum) els.levelNum.textContent = LEVEL;
+spineLayer = new SpineLayer(els.spineCanvas);  // starts async load of the 4 PP creatures
 buildPuzzle();
 renderHearts();
 spawnAmbientSparkles();
