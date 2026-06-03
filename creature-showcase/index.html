@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Creature Rescue</title>
-  <link rel="stylesheet" href="styles.css" />
+  <title>Rescue Friends</title>
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <!-- ambient background: layered bloom blobs + soft vignette (CSS-only) -->
@@ -25,6 +25,10 @@
 
   <main id="stage">
 
+    <!-- Forest scene backdrop (PSD "Background" layer). Covers the portrait
+         column; outside the column (landscape) the body shows solid #021113. -->
+    <div id="sceneBg" aria-hidden="true"></div>
+
     <!-- =========================================================
          TOP BAR (HUD) — casual-mobile gameplay chrome.
          Left: back + retry. Center: lives (hearts). Right: settings.
@@ -33,11 +37,22 @@
          ========================================================= -->
     <header id="hud">
       <div class="hud-side hud-left">
-        <button id="backBtn" class="icon-btn" type="button" aria-label="Back">
+        <!-- Game logo (top-left, per the art). Tap -> store link (mraid.open placeholder). -->
+        <button id="logoBtn" class="logo-btn" type="button" aria-label="Rescue Friends — open store">
+          <img src="assets/scene/logo.png" alt="Rescue Friends" draggable="false" />
+        </button>
+        <button id="backBtn" class="icon-btn" type="button" aria-label="Back" hidden>
           <img src="assets/ui/ic_back.png" alt="" draggable="false" />
         </button>
-        <button id="retryBtn" class="icon-btn" type="button" aria-label="Retry">
+        <!-- Retry = restart. Quick tap -> restart to the EDITED scene.
+             Press-and-hold -> restart to the DEFAULT scene. The radial ring
+             fills during the hold so you can see how long is left. -->
+        <button id="retryBtn" class="icon-btn" type="button" aria-label="Retry (tap = edited scene, hold = default)">
           <img src="assets/ui/ic_retry.png" alt="" draggable="false" />
+          <svg id="retryRing" class="retry-ring" viewBox="0 0 48 48" aria-hidden="true">
+            <circle class="ring-track" cx="24" cy="24" r="22"></circle>
+            <circle class="ring-fill"  cx="24" cy="24" r="22"></circle>
+          </svg>
         </button>
       </div>
       <!-- 3 hearts injected by main.js so they can break/respawn cleanly -->
@@ -53,13 +68,14 @@
     <div id="levelPill">Level <span id="levelNum">23</span></div>
 
     <!-- =========================================================
-         PUZZLE AREA — fake scripted puzzle.
-         A maze of thick navy arrows surrounds the dragon, who is
-         trapped behind a rounded "window" cage. Solving (or tapping
-         the hinted arrow) slides the cage open and frees him.
+         PUZZLE AREA — the directional VINE puzzle (vine-snake engine).
+         The creature is trapped BEHIND a tangle of vines. Tapping vines
+         in the right order slithers them off the board; clearing them all
+         frees the creature (WIN). Tapping a blocked vine = a miss (a heart).
+         The grid only shows in the map-edit facet (Shift+H).
          ========================================================= -->
     <section id="puzzleArea">
-      <div id="maze" aria-hidden="true"></div>     <!-- scripted arrows injected by main.js -->
+      <div id="maze" aria-hidden="true"></div>     <!-- legacy slot (unused; kept for layout) -->
       <div id="fx" aria-hidden="true"></div>        <!-- ambient sparkles + magic bursts -->
 
       <div id="glow"></div>                         <!-- soft spotlight behind creature -->
@@ -70,6 +86,11 @@
         <canvas id="spineCanvas" class="hidden" aria-hidden="true"></canvas>
         <div id="shadow"></div>                     <!-- contact shadow for grounding -->
       </div>
+
+      <!-- The VINE PUZZLE canvas (vine-snake engine). Transparent: the creature
+           shows behind it. Scaled/positioned via the edit-mode sliders so it
+           doesn't cover the HUD. Sits in FRONT of the creature (the "cage"). -->
+      <canvas id="vineCanvas" aria-label="Vine puzzle"></canvas>
 
       <!-- The cage: a rounded window in FRONT of the dragon. Slides open on solve. -->
       <div id="bars" aria-hidden="true">
@@ -86,7 +107,7 @@
 
       <!-- Tutorial hand for the hint (asset copied from another playable) -->
       <div id="tutorHand" aria-hidden="true">
-        <img src="assets/hands/tutorial_hand.png" alt="" draggable="false" />
+        <img src="assets/hands/tutorial_hand_new.png" alt="" draggable="false" />
       </div>
 
       <!-- Creature-switch arrows: cycle the roster (dragon + PP creatures + hurt variants). -->
@@ -96,6 +117,9 @@
       <button id="nextCreatureBtn" class="creature-arrow ca-right" type="button" aria-label="Next creature">
         <svg viewBox="0 0 24 24" width="30" height="30"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+
+      <!-- Hint glow: a pulsing ring drawn AROUND the targeted free arrow. -->
+      <div id="hintGlow" aria-hidden="true"></div>
     </section>
 
     <!-- =========================================================
@@ -104,19 +128,112 @@
     <footer id="bottomBar">
       <div id="instruction">
         <span class="paw" aria-hidden="true">&#128062;</span>
-        <span id="instructionText">Tap &amp; remove arrows to free the friend!</span>
+        <span id="instructionText">Tap the vines in order to free your friend!</span>
         <button id="hintBtn" class="hint-badge" type="button" aria-label="Hint">
           <img src="assets/ui/ic_lamp.png" alt="" draggable="false" />
-          <span class="hint-count">+1</span>
+          <span class="hint-count">3</span>
         </button>
       </div>
-      <div id="actionRow">
+      <!-- The scripted SOLVE!/WRONG MOVE buttons are gone from play (real vine
+           gameplay drives win/lose now). They live on, hidden, only so the edit
+           panel's "test popup" buttons can reuse solve()/wrongMove(). -->
+      <div id="actionRow" aria-hidden="true">
         <button id="solveBtn" type="button">SOLVE!</button>
-        <!-- TEMP test button: costs a heart per tap (3 -> fail). -->
         <button id="wrongBtn" type="button">WRONG MOVE</button>
       </div>
     </footer>
+
+    <!-- Decorative thorn-vine curtains (PSD LeftVine/RightVine) — placed at scene
+         scope (their MIDDLE sits on the scene's left/right edges, as in the PSD).
+         #stage masks (overflow:hidden) everything outside the scene. Bounce in on
+         start; swing open off-screen + fade on rescue. -->
+    <img id="vineLeft"  class="frame-vine" src="assets/scene/vine_left.png"  alt="" aria-hidden="true" draggable="false" />
+    <img id="vineRight" class="frame-vine" src="assets/scene/vine_right.png" alt="" aria-hidden="true" draggable="false" />
   </main>
+
+  <!-- Loading screen — logo + progress bar over the dark backdrop while the
+       background, vine atlases and Spine creatures load. -->
+  <div id="loadingScreen">
+    <img id="loadingLogo" src="assets/scene/logo.png" alt="Rescue Friends" draggable="false" />
+    <div id="loadingBarTrack"><div id="loadingBarFill"></div></div>
+  </div>
+
+  <!-- ===========================================================
+       EDIT PANEL (Shift+H) — the unified editor. Two facets:
+         • Mapa  — grid + paint/erase/undo/clear vines + speed
+         • Cena  — pick the creature (hides grid, shows the arrows),
+                   scale/position sliders for the board and the creature,
+                   and test buttons for the win/lose popups.
+       Export dumps EVERY editable setting as JSON.
+       =========================================================== -->
+  <aside id="editPanel" aria-hidden="true">
+    <div class="ep-head">
+      <span class="ep-title">Edit · Shift+H</span>
+      <div class="ep-tabs">
+        <button id="tabMap"  class="ep-tab active" type="button">🗺 Map</button>
+        <button id="tabArt"  class="ep-tab" type="button">🎨 Scene</button>
+      </div>
+    </div>
+
+    <!-- MAP facet: grid + vine tools -->
+    <div id="facetMap" class="ep-facet">
+      <div class="ep-tools">
+        <button id="toolPaint" class="ep-btn active" type="button">✏ Paint</button>
+        <button id="toolErase" class="ep-btn" type="button">⌫ Erase</button>
+        <button id="toolUndo"  class="ep-btn" type="button">↩ Undo</button>
+        <button id="toolClear" class="ep-btn" type="button">🗑 Clear</button>
+        <button id="toolRandom" class="ep-btn" type="button">🎲 Random</button>
+      </div>
+      <div class="ep-row">
+        <label>Vine speed <span class="ep-val" id="valSpeed">40</span></label>
+        <input type="range" id="slSpeed" min="6" max="80" step="1" value="40" />
+      </div>
+      <p class="ep-hint">Drag to draw a vine (head = last cell). Erase taps a vine. The grid only shows here.</p>
+    </div>
+
+    <!-- SCENE facet: creature pick + transforms + popup tests -->
+    <div id="facetArt" class="ep-facet" hidden>
+      <div class="ep-creature">
+        <button id="panelPrevCreature" class="ep-cbtn" type="button" aria-label="Previous creature">‹</button>
+        <span id="panelCreatureName">Blue Dragon</span>
+        <button id="panelNextCreature" class="ep-cbtn" type="button" aria-label="Next creature">›</button>
+      </div>
+      <div class="ep-group-label">Gameplay (vine board)</div>
+      <div class="ep-row"><label>Scale <span class="ep-val" id="valBoardScale">0.72</span></label>
+        <input type="range" id="slBoardScale" min="0.30" max="1.20" step="0.01" value="0.72" /></div>
+      <div class="ep-row"><label>Position X <span class="ep-val" id="valBoardX">0</span></label>
+        <input type="range" id="slBoardX" min="-0.45" max="0.45" step="0.01" value="0" /></div>
+      <div class="ep-row"><label>Position Y <span class="ep-val" id="valBoardY">0</span></label>
+        <input type="range" id="slBoardY" min="-0.45" max="0.45" step="0.01" value="0" /></div>
+      <div class="ep-group-label">Creature</div>
+      <div class="ep-row"><label>Scale <span class="ep-val" id="valCreatureScale">1.00</span></label>
+        <input type="range" id="slCreatureScale" min="0.40" max="1.80" step="0.01" value="1.00" /></div>
+      <div class="ep-row"><label>Position X <span class="ep-val" id="valCreatureX">0</span></label>
+        <input type="range" id="slCreatureX" min="-200" max="200" step="1" value="0" /></div>
+      <div class="ep-row"><label>Position Y <span class="ep-val" id="valCreatureY">0</span></label>
+        <input type="range" id="slCreatureY" min="-200" max="200" step="1" value="0" /></div>
+      <div class="ep-tools ep-tests">
+        <button id="testWinBtn"  class="ep-btn" type="button">🏆 Test win</button>
+        <button id="testHurtBtn" class="ep-btn" type="button">💔 Test hit</button>
+      </div>
+    </div>
+
+    <div class="ep-foot">
+      <button id="exportBtn" class="ep-export" type="button">⤓ Export all</button>
+    </div>
+  </aside>
+
+  <!-- Export overlay: the full scene (vines + creature + transforms) as JSON -->
+  <div id="exportOverlay" aria-hidden="true">
+    <div class="export-card">
+      <h3>Scene export</h3>
+      <textarea id="exportText" readonly></textarea>
+      <div class="export-actions">
+        <button id="copyExport" type="button">Copy</button>
+        <button id="closeExport" type="button">Close</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===========================================================
        SETTINGS popup — mobile toggles for Music / SFX / Haptics.
@@ -224,6 +341,7 @@
   </div>
 
   <script src="vendor/spine-webgl.js"></script>
-  <script src="main.js"></script>
+  <script src="vine-engine.js?v=9"></script>
+  <script src="main.js?v=9"></script>
 </body>
 </html>

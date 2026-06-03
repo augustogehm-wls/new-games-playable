@@ -950,11 +950,21 @@ body {
 /* ---- Landscape tweaks ------------------------------------------ */
 
 @media (orientation: landscape) {
-  #stage { gap: clamp(2px, 1vh, 8px); }
+  /* Keep the WHOLE UI together as a centered, portrait-shaped column instead of
+     letting the HUD / bottom bar spread across the wide screen. The column width
+     tracks the screen HEIGHT (~9:16), so it reads like a portrait phone parked in
+     the middle — matching the height-fit vine board (see vine-engine resize()). */
+  #stage {
+    gap: clamp(2px, 1vh, 8px);
+    width: min(58vh, 94vw);
+    margin-left: auto;
+    margin-right: auto;
+  }
   /* short vertical budget: shrink the cage so the field (=cage*2.1) still fits */
   #puzzleArea { --cage-size: min(19vh, 40vw); }
   #praiseLayer { top: 12%; }
-  #hud, #bottomBar, #puzzleArea { max-width: min(86vw, 760px); }
+  /* children fill the portrait column (don't widen past it) */
+  #hud, #bottomBar, #puzzleArea { max-width: 100%; }
   #solveBtn { min-width: clamp(180px, 36vw, 300px); }
 }
 
@@ -1592,3 +1602,283 @@ body.debug-open #winPage { justify-content: flex-start; padding-left: 4vw; }
 }
 #debugPanel button:hover { background: #5d5790; }
 #debugPanel .dbg-hint { margin-top: 8px; color: #aaa; font-size: 10px; }
+
+/* ====================================================================
+   RESCUE FRIENDS — merge additions (vine puzzle + unified edit mode)
+   ==================================================================== */
+
+/* The vines are the cage now; the old scripted cage + action row are gone. */
+#bars { display: none !important; }
+#actionRow { display: none !important; }
+
+/* Vine puzzle canvas — fills the puzzle area, sits IN FRONT of the creature
+   (z 5: above creature z2, maze z4, cage z3), transparent so the creature
+   shows through. tutorHand (z6) stays above it. */
+#vineCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 5;
+  touch-action: none;
+  pointer-events: auto;
+}
+/* While positioning art (Scene facet), the canvas is inert so the on-board
+   creature arrows are clickable and nothing paints. */
+body.facet-art #vineCanvas { pointer-events: none; }
+
+/* Creature transform driven by the edit sliders. Composes with the flex
+   centering (no top/left transform on the wrap) and with #creatureImg's own
+   jump/breathe transform (which lives on the child <img>, not here). */
+#creatureWrap {
+  transform: translate(var(--cx, 0px), var(--cy, 0px)) scale(var(--cs, 1));
+}
+
+/* Creature-switch arrows: only while picking a creature (Scene edit facet). */
+.creature-arrow { display: none; z-index: 7; }
+body.facet-art .creature-arrow { display: flex; }
+
+/* ---- Retry radial ring (hold-to-default progress) -------------------- */
+#retryBtn { position: relative; }
+.retry-ring {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  transform: rotate(-90deg);   /* start the fill at 12 o'clock */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+#retryBtn.holding .retry-ring { opacity: 1; }
+.retry-ring .ring-track { fill: none; stroke: rgba(43, 33, 80, 0.16); stroke-width: 4; }
+.retry-ring .ring-fill  { fill: none; stroke: #ffb52e; stroke-width: 4; stroke-linecap: round; }
+
+/* ---- Unified edit panel (Shift+H) ------------------------------------ */
+#editPanel {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 50;
+  width: min(290px, 86vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #2b2150;
+  border-radius: 14px;
+  box-shadow: 0 12px 34px rgba(43, 33, 80, 0.30);
+  font-family: inherit;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+body.editing #editPanel { display: flex; }
+.ep-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ep-title { font-weight: 800; font-size: 11px; letter-spacing: 0.05em; opacity: 0.6; text-transform: uppercase; }
+.ep-tabs { display: flex; gap: 6px; }
+.ep-tab {
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: none; border-radius: 9px; padding: 5px 10px; background: #ece9fb; color: #2b2150;
+}
+.ep-tab.active { background: #6c5ce7; color: #fff; }
+.ep-facet { display: flex; flex-direction: column; gap: 8px; }
+.ep-facet[hidden] { display: none; }
+.ep-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.ep-tests { margin-top: 4px; }
+.ep-btn {
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  border: none; border-radius: 9px; padding: 6px 10px; background: #f0eefb; color: #2b2150;
+}
+.ep-btn.active { background: #ffb52e; color: #3a2a00; }
+.ep-btn:active { transform: scale(0.95); }
+.ep-row { display: flex; flex-direction: column; gap: 2px; }
+.ep-row label { font-size: 11px; font-weight: 700; display: flex; justify-content: space-between; }
+.ep-val { font-variant-numeric: tabular-nums; opacity: 0.75; }
+.ep-row input[type="range"] { width: 100%; accent-color: #6c5ce7; }
+.ep-group-label { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.5; margin-top: 4px; }
+.ep-creature { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #f0eefb; border-radius: 10px; padding: 4px 6px; }
+#panelCreatureName { font-weight: 800; font-size: 13px; }
+.ep-cbtn { font: inherit; font-size: 18px; font-weight: 900; cursor: pointer; border: none; background: #fff; border-radius: 8px; width: 30px; height: 30px; color: #2b2150; }
+.ep-cbtn:active { transform: scale(0.92); }
+.ep-foot { margin-top: 6px; display: flex; }
+.ep-export { flex: 1; font: inherit; font-weight: 800; cursor: pointer; border: none; border-radius: 10px; padding: 9px; background: #2ec16b; color: #fff; }
+.ep-export:active { transform: scale(0.98); }
+.ep-hint { font-size: 10.5px; line-height: 1.4; opacity: 0.6; margin: 2px 0 0; }
+
+/* ---- Export overlay --------------------------------------------------- */
+#exportOverlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(20, 14, 40, 0.55);
+}
+#exportOverlay.show { display: flex; }
+.export-card {
+  background: #fff; border-radius: 16px; padding: 16px;
+  width: min(540px, 92vw); max-height: 84vh;
+  display: flex; flex-direction: column; gap: 10px;
+  box-shadow: 0 20px 54px rgba(0, 0, 0, 0.4);
+}
+.export-card h3 { margin: 0; color: #2b2150; }
+#exportText {
+  width: 100%; min-height: 46vh; resize: vertical;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+  border: 1px solid #d9d4ee; border-radius: 10px; padding: 10px;
+  color: #2b2150; background: #faf9ff;
+}
+.export-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.export-actions button { font: inherit; font-weight: 800; cursor: pointer; border: none; border-radius: 10px; padding: 9px 18px; }
+#copyExport { background: #6c5ce7; color: #fff; }
+#closeExport { background: #ece9fb; color: #2b2150; }
+
+/* ====================================================================
+   RESCUE FRIENDS — theme art (PSD: forest bg, vine curtains, logo,
+   tutorial hand, hint glow)
+   ==================================================================== */
+
+/* Solid dark backdrop seen behind the portrait column (e.g. in landscape). */
+body { background: #021113 !important; }
+#bgFx { display: none; }   /* the lavender blooms clash with the forest theme */
+
+/* Forest scene backdrop — covers the stage column, sits behind the chrome. */
+#sceneBg {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: #021113 url("assets/scene/background.jpg") center top / cover no-repeat;
+}
+
+/* ---- Logo (top-left) → store link ------------------------------------ */
+.logo-btn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  height: clamp(40px, 7.2vh, 66px);
+  line-height: 0;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease;
+}
+.logo-btn img { height: 100%; width: auto; display: block; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.45)); }
+.logo-btn:active { transform: scale(0.94); }
+#backBtn { display: none !important; }
+
+/* ---- Decorative vine curtains (LeftVine / RightVine) -----------------
+   Positioned per the PSD relative to the scene (Layer 0 frame): each vine's
+   MIDDLE sits on the scene's left/right edge, so half spills off and is cropped
+   by #stage's mask (overflow:hidden). They sprout up from the bottom. */
+.frame-vine {
+  position: absolute;
+  z-index: 3;                 /* ONLY above the background (z-1) + creature (z2);
+                                 the gameplay arrows (canvas z5), HUD, hints, etc.
+                                 all render in front of the vines. */
+  pointer-events: none;       /* taps pass through to the puzzle canvas */
+  height: auto;
+  transform-origin: center bottom;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 4px 10px rgba(0,0,0,0.45));
+}
+#vineLeft  { left: -71.7%; top: 24.9%; width: 128.2%; }
+#vineRight { left: 45.0%;  top: 19.8%; width: 110.8%; }
+
+/* cartoon bounce-in on scene start */
+.frame-vine.grow { animation: vineGrowIn 0.62s cubic-bezier(0.2, 0.85, 0.3, 1.2) both; }
+@keyframes vineGrowIn {
+  0%   { transform: scale(0.25); opacity: 0; }
+  55%  { opacity: 1; }
+  72%  { transform: scale(1.08); }
+  100% { transform: scale(1); opacity: 1; }
+}
+/* on rescue: swing open off-screen + fade (both at once) */
+#vineLeft.open  { animation: vineOpenL 0.72s ease-in forwards; }
+#vineRight.open { animation: vineOpenR 0.72s ease-in forwards; }
+@keyframes vineOpenL { to { transform: translate(-95%, 16%) scale(1.06) rotate(-11deg); opacity: 0; } }
+@keyframes vineOpenR { to { transform: translate(95%, 16%)  scale(1.06) rotate(11deg);  opacity: 0; } }
+
+/* ---- Tutorial hand — bounce with the pivot at the fingertip ---------- */
+#tutorHand {
+  width: clamp(64px, 14vh, 112px);
+  z-index: 9;                 /* above the curtains + glow so it's always visible */
+  transform: translate(-44%, -30%);   /* fingertip (~44%,36% of the art) lands on left/top */
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+#tutorHand.show { opacity: 1; }
+#tutorHand img { display: block; width: 100%; height: auto; transform-origin: 44% 36%; }
+#tutorHand.show img { animation: handTap 0.82s ease-in-out infinite; }
+@keyframes handTap { 0%, 100% { transform: scale(1); } 45% { transform: scale(0.8); } }
+
+/* ---- Hint: a pulsing ring drawn AROUND the targeted free arrow -------- */
+#hintGlow {
+  position: absolute;
+  width: clamp(70px, 16vh, 120px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 8;                  /* under the hand (z9), above the puzzle canvas (z5) */
+  background: radial-gradient(circle, rgba(255,224,120,0) 38%, rgba(255,214,110,0.6) 55%, rgba(255,196,70,0) 72%);
+  transition: opacity 0.2s ease;
+}
+#hintGlow.show { opacity: 1; animation: hintRing 0.95s ease-in-out infinite; }
+@keyframes hintRing {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.82); filter: brightness(1); }
+  50%      { transform: translate(-50%, -50%) scale(1.14); filter: brightness(1.4); }
+}
+
+/* ---- Remove the white spotlight behind the creature ------------------ */
+#glow { display: none !important; }
+
+/* ---- Mask the whole scene: crop anything outside it (vine spill, etc.) - */
+#stage { overflow: hidden; }
+/* HUD chrome rides above the vine curtains (vines z6, chrome z10) */
+#hud, #levelPill, #bottomBar { position: relative; z-index: 10; }
+
+/* ---- Green "sprouting" glow particles (rise with a noise-y wiggle) ---- */
+.gparticle {
+  position: absolute;
+  bottom: -6%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(150,255,170,0.95) 0%, rgba(90,230,130,0.5) 45%, rgba(70,210,120,0) 72%);
+  filter: blur(1px);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: gRise var(--gdur, 7s) linear var(--gdelay, 0s) infinite;
+}
+@keyframes gRise {
+  0%   { transform: translate(0, 0) scale(0.55); opacity: 0; }
+  12%  { opacity: var(--gop, 0.7); }
+  32%  { transform: translate(var(--gw, 12px), -26vh) scale(1); }
+  56%  { transform: translate(calc(var(--gw, 12px) * -1), -52vh) scale(0.95); }
+  80%  { transform: translate(var(--gw, 12px), -78vh) scale(0.8); opacity: var(--gop, 0.7); }
+  100% { transform: translate(0, -100vh) scale(0.6); opacity: 0; }
+}
+
+/* ---- Loading screen (logo + progress bar) ---------------------------- */
+#loadingScreen {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: clamp(20px, 4vh, 36px);
+  background: #021113;
+  transition: opacity 0.45s ease;
+}
+#loadingScreen.hide { opacity: 0; pointer-events: none; }
+#loadingLogo {
+  width: min(64vw, 300px); height: auto;
+  filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+  animation: loadLogoPulse 1.6s ease-in-out infinite;
+}
+@keyframes loadLogoPulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.045)} }
+#loadingBarTrack {
+  width: min(62vw, 280px); height: 12px; border-radius: 999px;
+  background: rgba(255,255,255,0.12);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+#loadingBarFill {
+  width: 0%; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #7fe6a0, #36c46b);
+  box-shadow: 0 0 10px rgba(120,255,160,0.6);
+  transition: width 0.3s ease;
+}

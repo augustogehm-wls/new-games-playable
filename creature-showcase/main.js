@@ -103,6 +103,13 @@ const els = {
   // gameplay HUD + puzzle
   puzzleArea: document.getElementById("puzzleArea"),
   maze: document.getElementById("maze"),
+  vineCanvas: document.getElementById("vineCanvas"),
+  retryRing: document.getElementById("retryRing"),
+  vineLeft: document.getElementById("vineLeft"),
+  vineRight: document.getElementById("vineRight"),
+  hintGlow: document.getElementById("hintGlow"),
+  loadingScreen: document.getElementById("loadingScreen"),
+  loadingBarFill: document.getElementById("loadingBarFill"),
   fx: document.getElementById("fx"),
   bgFx: document.getElementById("bgFx"),
   bars: document.getElementById("bars"),
@@ -177,12 +184,16 @@ const SFX_FILES = {
   fail_stinger:    "assets/audio/fail_stinger.mp3",   // FAIL endcard sting (sad harp)
   // dragon_sad — intentionally silent (the fail stinger covers the moment)
   piece_slide:     "assets/audio/pop.mp3",
+  // Paradise Paws SFX (from the WLS Asset Hub) for the vine puzzle:
+  vine_select:     "assets/audio/sfx_vine_select.mp3",       // correct pick — vine slithers free (magic_boost_button_02)
+  vine_error:      "assets/audio/sfx_vine_error.mp3?cb=2",    // wrong pick — blocked vine bonks (collision thud; clearer "error" than the old UI sound)
 };
 const SFX_VOL = {
   button_click: 0.55, soft_pop: 0.5, soft_bonk: 0.6,
   magical_sparkle: 0.55, solve_success: 0.7, heart_break: 0.65,
   popup_open: 0.55, toggle_switch: 0.6, dragon_happy: 0.7,
   fail_stinger: 0.7, piece_slide: 0.45,
+  vine_select: 0.6, vine_error: 0.6,
 };
 const sfxPool = {};
 function makeAudio(src, vol) { const a = new Audio(src); a.preload = "auto"; a.volume = vol; return a; }
@@ -273,6 +284,18 @@ let praiseIdx = 0;      // rotates through PRAISE_WORDS
 let praiseFadeTimer = null; // setTimeout handle for fading the praise word out
 let page = "creature";  // "creature" | "win" | "fail"
 let failBlinkTimer = null; // sad-dragon blink loop on the fail popup
+
+// ---- Merge state (vine gameplay + unified scene) --------------------
+// Assigned in setupVineMerge() once the engine's atlases have loaded. Declared
+// with `var` (no TDZ) so the hoisted gameplay functions can reference them.
+var vineEngine = null;          // the embeddable VineEngine instance
+var editedScene = null;         // the authoritative "current setup" (map + creature + transforms)
+// Live creature transform. Initialised to the PM-tuned PORTRAIT defaults
+// (kudu @ 0.77, nudged up 13px); loadFullScene() updates them from a scene.
+var creatureScale = 0.77, creatureX = 0, creatureY = -13;
+// Tutorial hints (3) + correct-move counter (5 correct -> a store-redirect nudge).
+var hintsLeft = 3, correctMoves = 0, redirectTried = false;
+var tutorialActive = false;     // the free intro tutorial (doesn't spend a hint)
 
 // Cache preloaded <img> objects per path so swaps never flicker.
 const imgCache = new Map();
@@ -582,7 +605,15 @@ function switchCreature(dir) {
   current = (current + dir + n) % n;
   haptic("light");
   sfx("button_click");
-  resetPuzzle();   // resets lives/bars/solved + showSad(CREATURES[current]); plays soft_pop
+  if (document.body.classList.contains("editing")) {
+    // In edit mode, just swap the trapped creature — keep the board + facet so
+    // you can audition each creature against the same scene without leaving edit.
+    stopLoops();
+    showSad(CREATURES[current]);
+    if (typeof syncPanelFromScene === "function") syncPanelFromScene();
+  } else {
+    resetPuzzle();   // fresh LOCKED puzzle for the new creature (reloads vines + lives)
+  }
 }
 
 // ======================================================================
@@ -604,8 +635,9 @@ function freeDragon() {
   solved = true;
   inputLocked = true;
   clearHint();
-  els.solveBtn.disabled = true;
+  if (els.solveBtn) els.solveBtn.disabled = true;
   els.bars.classList.add("open");
+  openCurtains();           // the vine curtains swing open off-screen + fade
   spawnMagicBurst();
   els.puzzleArea.classList.add("freed");
   setTimeout(() => {
@@ -711,14 +743,52 @@ function spawnHeartShards(heart) {
 // ---- Hint ------------------------------------------------------------
 // The arrow gameplay is gone for now, so the hint has no piece to point at yet.
 // Keep the button responsive; it'll point at the arrows PNG once that's added.
-function showHint() {
-  if (inputLocked || solved) return;
-  pressFeedback(els.hintBtn);
-  sfx("magical_sparkle");
+// Place the tutorial hand + a pulsing glow RING on a free arrow (board target).
+function placeHintAt(target) {
+  positionHandOverPoint(target.x, target.y);
+  if (els.hintGlow) {
+    const pa = els.puzzleArea.getBoundingClientRect();
+    els.hintGlow.style.left = (target.x - pa.left) + "px";
+    els.hintGlow.style.top = (target.y - pa.top) + "px";
+    els.hintGlow.classList.add("show");
+  }
+  els.tutorHand.classList.add("show");
 }
 
 function clearHint() {
   els.tutorHand.classList.remove("show");
+  if (els.hintGlow) els.hintGlow.classList.remove("show");
+  tutorialActive = false;
+  clearTimeout(showHint._t);
+}
+
+// Manual hint (button): spends one of the 3 hints, points at a free arrow.
+function showHint() {
+  if (inputLocked || solved || page !== "creature") return;
+  pressFeedback(els.hintBtn);
+  if (hintsLeft <= 0) return;
+  const target = (vineEngine && vineEngine.getHintTarget) ? vineEngine.getHintTarget() : null;
+  if (!target) return;                       // no free arrow to point at right now
+  hintsLeft--;
+  updateHintBadge();
+  sfx("magical_sparkle");
+  placeHintAt(target);
+  clearTimeout(showHint._t);
+  showHint._t = setTimeout(clearHint, 2800);
+}
+
+// Free intro tutorial at scene start — points at a free arrow, persists until
+// the first tap (does NOT spend a hint).
+function showTutorial() {
+  if (inputLocked || solved || page !== "creature") return;
+  const target = (vineEngine && vineEngine.getHintTarget) ? vineEngine.getHintTarget() : null;
+  if (!target) return;
+  tutorialActive = true;
+  placeHintAt(target);
+}
+function scheduleTutorial() {
+  clearTimeout(scheduleTutorial._t);
+  scheduleTutorial._t = setTimeout(showTutorial, 520);   // let layout + atlases settle
 }
 
 // Place the tutorial hand over a target element (so its fingertip points at it).
@@ -765,7 +835,9 @@ function emitMagic(cx, cy, count, spreadPct) {
 
 // Magical sparkle burst centred on the cage, used when the bars dissolve.
 function spawnMagicBurst() {
-  const rect = els.bars.getBoundingClientRect();
+  // The cage (#bars) is hidden in the merge — the vines are the cage now — so
+  // center the burst on the creature instead of the (display:none) bars.
+  const rect = els.wrap.getBoundingClientRect();
   const pa = els.puzzleArea.getBoundingClientRect();
   emitMagic(rect.left + rect.width / 2 - pa.left, rect.top + rect.height / 2 - pa.top, 22, 0.42);
   sfx("magical_sparkle");
@@ -773,35 +845,22 @@ function spawnMagicBurst() {
 
 // ---- Ambient FX (premium feel, spawned once) -------------------------
 // Foreground twinkling sparkles in #fx + slow-drifting background dust in #bgFx.
+// Ambient green glow particles that "sprout" up the scene with a noise-y
+// horizontal wiggle (replaces the old white sparkles + lavender dust).
 function spawnAmbientSparkles() {
-  if (els.fx.querySelectorAll(".spark").length) return; // only once
-  for (let i = 0; i < 12; i++) {
-    const s = document.createElement("div");
-    s.className = "spark";
-    const sz = 5 + Math.random() * 9;
-    s.style.width = s.style.height = sz + "px";
-    s.style.left = Math.random() * 96 + 2 + "%";
-    s.style.top = Math.random() * 92 + 4 + "%";
-    s.style.setProperty("--sdur", 2.4 + Math.random() * 2.6 + "s");
-    s.style.setProperty("--sdelay", Math.random() * 3 + "s");
-    els.fx.appendChild(s);
-  }
-  // subtle drifting magical dust behind the scene
-  if (els.bgFx && !els.bgFx.querySelector(".dust")) {
-    for (let i = 0; i < 7; i++) {
-      const d = document.createElement("div");
-      d.className = "dust";
-      const sz = 14 + Math.random() * 24;
-      d.style.width = d.style.height = sz + "px";
-      d.style.left = Math.random() * 88 + 6 + "%";
-      d.style.top = Math.random() * 78 + 12 + "%";
-      d.style.setProperty("--ddur", 8 + Math.random() * 7 + "s");
-      d.style.setProperty("--ddelay", Math.random() * 8 + "s");
-      d.style.setProperty("--dx", Math.random() * 30 - 15 + "px");
-      d.style.setProperty("--dy", -30 - Math.random() * 45 + "px");
-      d.style.setProperty("--dop", (0.26 + Math.random() * 0.24).toFixed(2));
-      els.bgFx.appendChild(d);
-    }
+  if (!els.fx || els.fx.querySelector(".gparticle")) return; // only once
+  const N = 16;
+  for (let i = 0; i < N; i++) {
+    const p = document.createElement("div");
+    p.className = "gparticle";
+    const sz = 8 + Math.random() * 18;
+    p.style.width = p.style.height = sz + "px";
+    p.style.left = (4 + Math.random() * 92).toFixed(1) + "%";
+    p.style.setProperty("--gdur", (5 + Math.random() * 5).toFixed(2) + "s");
+    p.style.setProperty("--gdelay", (-Math.random() * 8).toFixed(2) + "s"); // negative = staggered, no empty start
+    p.style.setProperty("--gw", ((Math.random() * 2 - 1) * 26).toFixed(0) + "px");
+    p.style.setProperty("--gop", (0.45 + Math.random() * 0.45).toFixed(2));
+    els.fx.appendChild(p);
   }
 }
 
@@ -815,13 +874,26 @@ function resetPuzzle() {
   sfx("soft_pop");
 
   clearHint();
-  els.solveBtn.disabled = false;
+  if (els.solveBtn) els.solveBtn.disabled = false;
   els.bars.classList.remove("open");
   els.puzzleArea.classList.remove("freed");
   // clear any leftover magic particles
   els.fx.querySelectorAll(".magic").forEach((m) => m.remove());
 
-  buildPuzzle();        // rebuild all pieces from scratch
+  // Reload the vine puzzle fresh (same designed layout) and un-freeze it. Keeps
+  // the CURRENT creature (creature-switch calls this for a fresh board), so we
+  // don't reset `current` here — only the puzzle + lives.
+  if (vineEngine && editedScene) {
+    vineEngine.loadScene(editedScene.vine);
+    vineEngine.setActive(true);
+    vineEngine.setMode("play");
+  }
+  applyCreatureTransform();
+
+  hintsLeft = 3; correctMoves = 0; redirectTried = false;
+  updateHintBadge();
+  playCurtainsIn();        // cartoon bounce-in of the vine curtains
+
   renderHearts();
   stopLoops();
   showSad(CREATURES[current]);
@@ -844,13 +916,8 @@ els.solveBtn.addEventListener("click", () => { pressFeedback(els.solveBtn); solv
 if (els.wrongBtn) els.wrongBtn.addEventListener("click", wrongMove);
 els.hintBtn.addEventListener("click", showHint);
 
-els.retryBtn.addEventListener("click", () => {
-  pressFeedback(els.retryBtn);
-  els.retryBtn.classList.remove("spin");
-  void els.retryBtn.offsetWidth;
-  els.retryBtn.classList.add("spin");
-  resetPuzzle();
-});
+// Retry is now a dual-action restart (quick tap = edited scene, hold = default)
+// with a radial progress ring — wired in setupVineMerge() at the bottom.
 // Back is a soft reset in this standalone playable (no real navigation).
 els.backBtn.addEventListener("click", () => { pressFeedback(els.backBtn); resetPuzzle(); });
 els.settingsBtn.addEventListener("click", () => { pressFeedback(els.settingsBtn); openSettings(); });
@@ -897,6 +964,8 @@ function goToPage(name) {
   page = name;
   hideWin();
   hideFail();
+  // Freeze the vine board behind a popup; resetPuzzle() un-freezes it on return.
+  if (vineEngine && name !== "creature") vineEngine.setActive(false);
   if (name === "win") { stopLoops(); showWin(); }      // freeze gameplay, show win
   else if (name === "fail") { stopLoops(); showFail(); } // freeze gameplay, show fail
   else { resetPuzzle(); }                               // back to a fresh LOCKED puzzle
@@ -1216,4 +1285,342 @@ spineLayer = new SpineLayer(els.spineCanvas);  // starts async load of the 4 PP 
 buildPuzzle();
 renderHearts();
 spawnAmbientSparkles();
-loadCreature(0);   // dragon starts SAD, trapped behind the cage (LOCKED state)
+loadCreature(0);   // dragon starts SAD, trapped behind the vines (LOCKED state)
+setupVineMerge();  // mount the vine puzzle + unified edit mode + dual-action retry
+
+// ======================================================================
+// VINE MERGE — wires the vine-snake puzzle engine into the rescue chrome.
+//   • mounts VineEngine on #vineCanvas inside the puzzle area (in FRONT of the
+//     creature = the "cage"); transparent so the creature shows through
+//   • onAllCleared -> freeDragon() (WIN);  onWrongTap -> loseHeart() (a miss)
+//   • unified edit mode (Shift+H): Map facet (grid + paint/erase/speed) and
+//     Scene facet (pick creature, scale/position sliders, popup tests)
+//   • Export dumps the full scene (vines + creature + transforms) as JSON
+//   • Retry: quick tap -> edited scene, press-and-hold -> default scene, with a
+//     radial ring showing the hold progress
+// ======================================================================
+
+// Creature transform — composes with the flex centering via CSS custom props,
+// so it never fights #creatureWrap's layout (and #creatureImg's jump/breathe).
+// In LANDSCAPE we center the creature (drop the portrait offset) so it sits in
+// the middle of the screen alongside the height-fit board — a portrait sim.
+function applyCreatureTransform() {
+  const landscape = window.innerWidth > window.innerHeight;
+  const cx = landscape ? 0 : creatureX;
+  const cy = landscape ? 0 : creatureY;
+  els.wrap.style.setProperty("--cx", cx + "px");
+  els.wrap.style.setProperty("--cy", cy + "px");
+  els.wrap.style.setProperty("--cs", String(creatureScale));
+}
+
+// Update the hint badge number (3 -> 0).
+function updateHintBadge() {
+  const el = els.hintBtn && els.hintBtn.querySelector(".hint-count");
+  if (el) el.textContent = String(Math.max(0, hintsLeft));
+}
+// Place the tutorial hand so its fingertip lands on a viewport point.
+function positionHandOverPoint(vx, vy) {
+  if (!els.tutorHand) return;
+  const pa = els.puzzleArea.getBoundingClientRect();
+  els.tutorHand.style.left = (vx - pa.left) + "px";
+  els.tutorHand.style.top  = (vy - pa.top) + "px";
+}
+// Vine curtains — cartoon bounce-in (scene start) / swing-open + fade (rescue).
+function playCurtainsIn() {
+  [els.vineLeft, els.vineRight].forEach((v) => {
+    if (!v) return;
+    v.classList.remove("open", "grow");
+    void v.offsetWidth;            // restart the entrance animation
+    v.classList.add("grow");
+  });
+}
+function openCurtains() {
+  if (els.vineLeft) els.vineLeft.classList.add("open");
+  if (els.vineRight) els.vineRight.classList.add("open");
+}
+
+// The full unified scene = vine layout + creature choice + both transforms.
+// Default = the PM-approved portrait setup (kudu, tuned scales/offsets).
+function buildDefaultScene() {
+  return { vine: vineEngine.defaultScene(), creatureIndex: 3, creatureScale: 0.77, creatureX: 0, creatureY: -13 };
+}
+function captureScene() {
+  return { vine: vineEngine.getScene(), creatureIndex: current, creatureScale: creatureScale, creatureX: creatureX, creatureY: creatureY };
+}
+// Restore a full scene (used by the two restart actions). Like resetPuzzle, but
+// also restores the creature choice + transforms.
+function loadFullScene(scene) {
+  current = scene.creatureIndex | 0;
+  creatureScale = scene.creatureScale; creatureX = scene.creatureX; creatureY = scene.creatureY;
+  applyCreatureTransform();
+  lives = START_LIVES; solved = false; inputLocked = false; wrongCooldown = false;
+  if (els.solveBtn) els.solveBtn.disabled = false;
+  els.bars.classList.remove("open");
+  els.puzzleArea.classList.remove("freed");
+  els.fx.querySelectorAll(".magic").forEach((m) => m.remove());
+  hintsLeft = 3; correctMoves = 0; redirectTried = false; updateHintBadge();
+  playCurtainsIn();
+  renderHearts();
+  vineEngine.loadScene(scene.vine);
+  vineEngine.setActive(true);
+  vineEngine.setMode("play");
+  hideWin(); hideFail(); page = "creature";
+  stopLoops(); showSad(CREATURES[current]);
+  syncPanelFromScene();
+  scheduleTutorial();      // show the intro tutorial on a fresh scene
+}
+function restartEdited() { if (!vineEngine || !editedScene) return; haptic("light"); sfx("soft_pop"); loadFullScene(editedScene); }
+function restartDefault() { if (!vineEngine) return; loadFullScene(buildDefaultScene()); }
+
+// Mirror the live scene values back into the edit-panel controls.
+function syncPanelFromScene() {
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+  const txt = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+  const bt = vineEngine ? vineEngine.getBoardTransform() : { scale: 0.72, ox: 0, oy: 0 };
+  set("slBoardScale", bt.scale); txt("valBoardScale", (+bt.scale).toFixed(2));
+  set("slBoardX", bt.ox); txt("valBoardX", (+bt.ox).toFixed(2));
+  set("slBoardY", bt.oy); txt("valBoardY", (+bt.oy).toFixed(2));
+  set("slCreatureScale", creatureScale); txt("valCreatureScale", creatureScale.toFixed(2));
+  set("slCreatureX", creatureX); txt("valCreatureX", String(Math.round(creatureX)));
+  set("slCreatureY", creatureY); txt("valCreatureY", String(Math.round(creatureY)));
+  const spd = vineEngine ? vineEngine.speed : 40;
+  set("slSpeed", spd); txt("valSpeed", String(spd));
+  txt("panelCreatureName", CREATURES[current] ? CREATURES[current].name : "");
+}
+
+function setupVineMerge() {
+  const $ = (id) => document.getElementById(id);
+
+  // ---- mount the engine ----
+  vineEngine = window.VineEngine;   // the module IS the singleton
+  vineEngine.create({
+    canvas: els.vineCanvas,
+    host: els.puzzleArea,
+    onAllCleared: () => { if (page === "creature" && !solved) freeDragon(); },
+    onWrongTap:   () => { if (page !== "creature" || solved) return; clearHint(); sfx("vine_error"); loseHeart(); },
+    onCorrectTap: () => {
+      if (page !== "creature" || solved) return;
+      clearHint();                                // first tap dismisses the tutorial/hint hand
+      sfx("vine_select");                         // satisfying "select" on a correct pick
+      correctMoves++;
+      if (correctMoves >= 5 && !redirectTried) { redirectTried = true; onInstallClick(); }  // 5 correct -> store-redirect nudge
+    },
+    onReady: () => {
+      if (window.__rfLoadStep) window.__rfLoadStep();   // vine atlases loaded -> advance the loader
+      editedScene = buildDefaultScene();
+      loadFullScene(editedScene);   // boot into the default scene (kudu + tuned transforms)
+    },
+  });
+
+  // ---- edit-mode + facet control ----
+  function isEditing() { return document.body.classList.contains("editing"); }
+  function setFacet(which) {
+    const art = which === "art";
+    $("tabMap").classList.toggle("active", !art);
+    $("tabArt").classList.toggle("active", art);
+    $("facetMap").hidden = art;
+    $("facetArt").hidden = !art;
+    document.body.classList.toggle("facet-art", art);
+    vineEngine.setMode(art ? "edit-art" : "edit-map");  // grid shows only in the Map facet
+    if (art) syncPanelFromScene();
+  }
+  function setEditing(on) {
+    document.body.classList.toggle("editing", on);
+    $("editPanel").setAttribute("aria-hidden", on ? "false" : "true");
+    if (on) {
+      setFacet("map");
+      vineEngine.setActive(true);
+    } else {
+      // Leaving edit: the current setup becomes the new "edited scene", then we
+      // drop into a fresh play attempt of it.
+      editedScene = captureScene();
+      document.body.classList.remove("facet-art");
+      lives = START_LIVES; solved = false; inputLocked = false; wrongCooldown = false;
+      renderHearts();
+      vineEngine.setMode("play");
+      vineEngine.setActive(true);
+      vineEngine.loadScene(editedScene.vine);
+      stopLoops(); showSad(CREATURES[current]);
+    }
+  }
+
+  window.addEventListener("keydown", (e) => {
+    // Shift+H toggles edit. NOT Ctrl+Shift+H (that's the win-card debug panel).
+    if (e.code === "KeyH" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      setEditing(!isEditing());
+    }
+  });
+  // Re-center the creature when the orientation/size changes (the engine re-fits
+  // the board itself via its ResizeObserver + resize listener).
+  window.addEventListener("resize", applyCreatureTransform);
+  window.addEventListener("orientationchange", applyCreatureTransform);
+  $("tabMap").addEventListener("click", () => setFacet("map"));
+  $("tabArt").addEventListener("click", () => setFacet("art"));
+
+  // ---- map tools ----
+  function activateTool(id) {
+    $("toolPaint").classList.toggle("active", id === "toolPaint");
+    $("toolErase").classList.toggle("active", id === "toolErase");
+  }
+  $("toolPaint").addEventListener("click", () => { vineEngine.setTool("paint"); activateTool("toolPaint"); });
+  $("toolErase").addEventListener("click", () => { vineEngine.setTool("erase"); activateTool("toolErase"); });
+  $("toolUndo").addEventListener("click", () => vineEngine.undo());
+  $("toolClear").addEventListener("click", () => vineEngine.clearBoard());
+  $("toolRandom").addEventListener("click", () => vineEngine.randomize());
+
+  // ---- sliders (generic binder) ----
+  function bindRange(id, valId, fn) {
+    const el = $(id), v = $(valId);
+    if (!el) return;
+    el.addEventListener("input", () => { const out = fn(parseFloat(el.value)); if (v && out != null) v.textContent = out; });
+  }
+  bindRange("slSpeed", "valSpeed", (x) => { vineEngine.setSpeed(x); return String(Math.round(x)); });
+  bindRange("slBoardScale", "valBoardScale", (x) => { vineEngine.setBoardTransform({ scale: x }); return x.toFixed(2); });
+  bindRange("slBoardX", "valBoardX", (x) => { vineEngine.setBoardTransform({ ox: x }); return x.toFixed(2); });
+  bindRange("slBoardY", "valBoardY", (x) => { vineEngine.setBoardTransform({ oy: x }); return x.toFixed(2); });
+  bindRange("slCreatureScale", "valCreatureScale", (x) => { creatureScale = x; applyCreatureTransform(); return x.toFixed(2); });
+  bindRange("slCreatureX", "valCreatureX", (x) => { creatureX = x; applyCreatureTransform(); return String(Math.round(x)); });
+  bindRange("slCreatureY", "valCreatureY", (x) => { creatureY = x; applyCreatureTransform(); return String(Math.round(x)); });
+
+  // ---- creature picker (panel buttons reuse switchCreature, which is edit-aware) ----
+  $("panelPrevCreature").addEventListener("click", () => switchCreature(-1));
+  $("panelNextCreature").addEventListener("click", () => switchCreature(1));
+
+  // ---- popup test buttons (the old scripted SOLVE/WRONG hooks, kept for art QA) ----
+  $("testWinBtn").addEventListener("click", () => solve());
+  $("testHurtBtn").addEventListener("click", () => loseHeart());
+
+  // ---- logo -> store link (placeholder mraid.open) ----
+  const logoBtn = $("logoBtn");
+  if (logoBtn) logoBtn.addEventListener("click", () => { pressFeedback(logoBtn); onInstallClick(); });
+
+  // ---- export ----
+  $("exportBtn").addEventListener("click", () => {
+    $("exportText").value = buildExportText(captureScene());
+    $("exportOverlay").classList.add("show");
+    $("exportOverlay").setAttribute("aria-hidden", "false");
+  });
+  $("closeExport").addEventListener("click", () => {
+    $("exportOverlay").classList.remove("show");
+    $("exportOverlay").setAttribute("aria-hidden", "true");
+  });
+  $("copyExport").addEventListener("click", () => {
+    const t = $("exportText").value;
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => {
+      $("copyExport").textContent = "Copied!";
+      setTimeout(() => ($("copyExport").textContent = "Copy"), 1200);
+    }, () => {});
+  });
+
+  // ---- retry: quick tap = edited scene, press-and-hold = default + ring ----
+  (function setupRetryHold() {
+    const btn = els.retryBtn, ring = els.retryRing;
+    const fill = ring ? ring.querySelector(".ring-fill") : null;
+    const C = 2 * Math.PI * 22;     // ring circumference (r=22)
+    const HOLD_MS = 1000;
+    if (fill) { fill.style.strokeDasharray = C.toFixed(2); fill.style.strokeDashoffset = C.toFixed(2); }
+    let raf = null, t0 = 0, fired = false, holding = false;
+    const setRing = (p) => { if (fill) fill.style.strokeDashoffset = (C * (1 - p)).toFixed(2); };
+    function tick(now) {
+      const p = Math.min(1, (now - t0) / HOLD_MS);
+      setRing(p);
+      if (p >= 1) {
+        fired = true; holding = false; btn.classList.remove("holding");
+        haptic("medium"); sfx("soft_pop");
+        restartDefault();
+        if (raf) { cancelAnimationFrame(raf); raf = null; }
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    function start(e) {
+      if (e) e.preventDefault();
+      if (isEditing()) return;     // retry acts only in play
+      holding = true; fired = false; t0 = performance.now();
+      btn.classList.add("holding"); pressFeedback(btn);
+      raf = requestAnimationFrame(tick);
+    }
+    function end() {
+      if (!holding && !fired) return;
+      if (raf) { cancelAnimationFrame(raf); raf = null; }
+      btn.classList.remove("holding");
+      if (fired) { fired = false; holding = false; setRing(0); return; }  // default already fired
+      holding = false; setRing(0);
+      btn.classList.remove("spin"); void btn.offsetWidth; btn.classList.add("spin");
+      restartEdited();             // quick release -> edited scene
+    }
+    btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointerup", end);
+    btn.addEventListener("pointercancel", end);
+    btn.addEventListener("pointerleave", () => { if (holding) end(); });
+  })();
+
+  syncPanelFromScene();
+}
+
+// Build the export text (human-readable header + full JSON scene + vine paths).
+function buildExportText(scene) {
+  const v = scene.vine;
+  const c = CREATURES[scene.creatureIndex] || {};
+  const full = {
+    creature: c.id || scene.creatureIndex,
+    creatureIndex: scene.creatureIndex,
+    creatureScale: +(+scene.creatureScale).toFixed(3),
+    creatureOffset: { x: Math.round(scene.creatureX), y: Math.round(scene.creatureY) },
+    board: v.board,
+    speed: v.speed,
+    grid: v.grid,
+    lives: START_LIVES,
+    level: LEVEL,
+    vines: v.vines,
+  };
+  const pathsJson = "[\n" + v.vines.map((vn) =>
+    "  [" + vn.path.map((p) => "{x:" + p.x + ",y:" + p.y + "}").join(",") + "]"
+  ).join(",\n") + "\n]";
+  return "RESCUE FRIENDS — scene export\n" +
+    "creature: " + full.creature + " (#" + full.creatureIndex + ")  •  " + v.vines.length +
+    " vines  •  speed " + v.speed + "  •  grid " + v.grid.cols + "x" + v.grid.rows + "\n" +
+    "creature: scale " + full.creatureScale + "  offset (" + full.creatureOffset.x + "," + full.creatureOffset.y + ")\n" +
+    "board: scale " + v.board.scale + "  offset (" + v.board.ox + "," + v.board.oy + ")\n\n" +
+    "FULL SCENE (JSON):\n" + JSON.stringify(full, null, 2) + "\n\n" +
+    "VINE PATHS (paste into FIXED_MAP):\n" + pathsJson;
+}
+
+// ======================================================================
+// LOADING SCREEN — logo + progress bar while the heavy assets load
+// (background image, vine atlases, the 4 Spine creatures). Fills as each of
+// the three milestones completes, then fades out. Hard 8s safety cap.
+// ======================================================================
+(function setupLoader() {
+  const TOTAL = 3;
+  let done = 0, finished = false;
+  function setBar(pct) { if (els.loadingBarFill) els.loadingBarFill.style.width = pct + "%"; }
+  function finish() {
+    if (finished) return;
+    finished = true;
+    setBar(100);
+    setTimeout(() => { if (els.loadingScreen) els.loadingScreen.classList.add("hide"); }, 260);
+  }
+  function bump() {
+    if (finished) return;
+    done++;
+    setBar(Math.min(96, Math.round((done / TOTAL) * 100)));
+    if (done >= TOTAL) finish();
+  }
+  // 1) background image
+  const bg = new Image();
+  bg.onload = bump; bg.onerror = bump;
+  bg.src = "assets/scene/background.jpg";
+  // 2) vine atlases — VineEngine.onReady calls this hook
+  window.__rfLoadStep = bump;
+  // 3) Spine creatures — poll the shared SpineLayer until it reports ready
+  let tries = 0;
+  const poll = setInterval(() => {
+    tries++;
+    if (typeof spineLayer !== "undefined" && spineLayer && spineLayer.ready) { clearInterval(poll); bump(); }
+    else if (tries > 70) { clearInterval(poll); bump(); }   // ~7s cap on Spine
+  }, 100);
+  // hard safety: never trap the player behind the loader
+  setTimeout(finish, 8000);
+})();
